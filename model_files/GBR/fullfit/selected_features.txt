@@ -1,0 +1,15 @@
+temperature_C
+wt_percent_Cu
+wt_percent_Ni
+wt_percent_Mn
+wt_percent_P
+fluence_n_cm2
+flux_n_cm2_sec
+Product Form_0
+Product Form_1
+Product Form_2
+Product Form_3
+Product Form_4
+Product Form_5
+Reactor Type_0
+Reactor Type_1

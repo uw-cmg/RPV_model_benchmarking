@@ -1,0 +1,12 @@
+temperature_C
+wt_percent_Cu
+wt_percent_Ni
+wt_percent_Mn
+wt_percent_P
+wt_percent_Si
+wt_percent_C
+log(fluence_n_cm2)
+log(flux_n_cm2_sec)
+fluence_n_cm2
+flux_n_cm2_sec
+Time

@@ -20,11 +20,16 @@ def plot_embrittlement_curve(df, model_name_list, flux_list, style='log', num_po
     # style = log, linear, sqrt
     # model_name_list = list of model names, e.g., EONY, E900, OWAY, GBR, GKRR, Jacobs23, Jacobs24
     # flux_list = list of fluxes to evaluate each model at
+    # This used to just iterate over all rows in df, but that repeats many alloys. Now, just iterate over unique alloys
 
+    alloys = df['alloy'].unique()
     fluences = np.arange(16.5, 21, (21 - 16.5) / num_points)
-    for i, data in df.iterrows():
+    #for i, data in df.iterrows():
+    for alloy in alloys:
+        print('On alloy', alloy)
         plt.clf()
         model_count = 0
+        data = df[df['alloy'] == alloy]
         for model_name in model_name_list:
             model = models[model_name]
             features = model._features()
@@ -34,7 +39,7 @@ def plot_embrittlement_curve(df, model_name_list, flux_list, style='log', num_po
                 for f in features:
                     if f not in ['log(fluence_n_cm2)', 'fluence_n_cm2', 'flux_n_cm2_sec', 'log(flux_n_cm2_sec)',
                                        'Time', 'log(effective_fluence)']:
-                        d[f] = [data[f] for i in range(num_points)]
+                        d[f] = [data[f].iloc[0] for i in range(num_points)]
                     else:
                         if f == 'log(fluence_n_cm2)':
                             d[f] = fluences
@@ -55,18 +60,18 @@ def plot_embrittlement_curve(df, model_name_list, flux_list, style='log', num_po
                 preds, df_data = model.predict(df_data)
 
                 if include_ATR2 == True:
-                    temp_C = data['temperature_C']
-                    cu = data['wt_percent_Cu']
-                    ni = data['wt_percent_Ni']
-                    mn = data['wt_percent_Mn']
-                    si = data['wt_percent_Si']
-                    p = data['wt_percent_P']
+                    temp_C = data['temperature_C'].iloc[0]
+                    cu = data['wt_percent_Cu'].iloc[0]
+                    ni = data['wt_percent_Ni'].iloc[0]
+                    mn = data['wt_percent_Mn'].iloc[0]
+                    si = data['wt_percent_Si'].iloc[0]
+                    p = data['wt_percent_P'].iloc[0]
                     atr2_292 = OWAY().atr2cf292(cu, ni, mn, si, p)
                     atr2_T = OWAY().atr2cfti(temp_C, atr2_292)
                     atr2_tts = 0.00067*(atr2_T)**2 +0.49*atr2_T
 
                 # Add alloy name to the plot
-                alloy_comp = data['alloy'] + '_Cu_' + str(data['wt_percent_Cu']) + '_Ni_' + str(data['wt_percent_Ni']) + '_Mn_' + str(data['wt_percent_Mn'])
+                alloy_comp = data['alloy'].iloc[0] + '_Cu_' + str(data['wt_percent_Cu'].iloc[0]) + '_Ni_' + str(data['wt_percent_Ni'].iloc[0]) + '_Mn_' + str(data['wt_percent_Mn'].iloc[0])
                 if model_count == 0 and flux_count == 0:
                     plt.scatter([0], [0], s=0, c='white', label=alloy_comp)
                     if include_ATR2 == True:
@@ -77,16 +82,16 @@ def plot_embrittlement_curve(df, model_name_list, flux_list, style='log', num_po
                         if style == 'sqrt':
                             plt.scatter([np.sqrt(1.38*10**20)], [atr2_tts], color='red', label='ATR2 CF')
                 if style == 'log':
-                    alloy_data = df[df['alloy'] == data['alloy']]
-                    plt.scatter(alloy_data['log(fluence_n_cm2)'], alloy_data['Measured DT41J  [C]'], color='black')
+                    #alloy_data = df[df['alloy'] == data['alloy']]
+                    plt.scatter(data['log(fluence_n_cm2)'], data['Measured DT41J  [C]'], color='black')
                     plt.plot(fluences, preds, color=colors[model_name], linestyle=linestyles[flux_count], label=model_name + ' ' + 'Flux=' + str(round(flux, 3)))
                 elif style == 'linear':
-                    alloy_data = df[df['alloy'] == data['alloy']]
-                    plt.scatter(10**alloy_data['log(fluence_n_cm2)'], alloy_data['Measured DT41J  [C]'], color='black')
+                    #alloy_data = df[df['alloy'] == data['alloy']]
+                    plt.scatter(10**data['log(fluence_n_cm2)'], data['Measured DT41J  [C]'], color='black')
                     plt.plot(10**fluences, preds, color=colors[model_name],  linestyle=linestyles[flux_count], label=model_name + ' ' + 'Flux=' + str(round(flux, 3)))
                 elif style == 'sqrt':
-                    alloy_data = df[df['alloy'] == data['alloy']]
-                    plt.scatter(np.sqrt(10**alloy_data['log(fluence_n_cm2)']), alloy_data['Measured DT41J  [C]'], color='black')
+                    #alloy_data = df[df['alloy'] == data['alloy']]
+                    plt.scatter(np.sqrt(10**data['log(fluence_n_cm2)']), data['Measured DT41J  [C]'], color='black')
                     plt.plot(np.sqrt(10**fluences), preds, color=colors[model_name],  linestyle=linestyles[flux_count], label=model_name + ' ' + 'Flux=' + str(round(flux, 3)))
                 flux_count += 1
             model_count += 1

@@ -62,6 +62,22 @@ class Metrics():
             raise ValueError('filter_operation should be one of: equal, greater, less')
         return df
 
+    def get_metric_per_alloy(self, df, metric_name, model_name):
+        # Per alloy metric
+        # metric_name one of ME, MAE, RMSE
+        alloys = df['alloy'].unique()
+        errors = list()
+        for alloy in alloys:
+            df_sub = df[df['alloy'] == alloy]
+            if metric_name == 'ME':
+                error = self.get_me(df_sub, model_name=model_name)
+            elif metric_name == 'MAE':
+                error = self.get_mae(df_sub, model_name=model_name)
+            elif metric_name == 'RMSE':
+                error = self.get_rmse(df_sub, model_name=model_name)
+            errors.append(error)
+        return errors, alloys
+
 class Benchmarking(Metrics):
 
     def __init__(self):

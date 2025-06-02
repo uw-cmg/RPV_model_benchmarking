@@ -240,7 +240,10 @@ class OWAY():
         a2cfti = dsy255 + (dsy255 - dsy292) * (temp_C - 255) / (255 - 292)
         return a2cfti
 
-    def tts2dsy(self, pf, tts):
+    def tts2dsy_OLD(self, pf, tts):
+        '''
+        Below is old way from Takuya
+        '''
         # Converting EONY TTS to DSY using dsy = tts/cc
         # cc = IF(($K55="W")+($K55="W80"),MIN(_WCc3*BD55^3+_WCc2*BD55^2+_WCc1*BD55+_WCc0,WCcmax),MIN(_Cc3*BD55^3+_Cc2*BD55^2+_Cc1*BD55+Cc0,Ccmax)))
         # Plates	Cc3	Cc2	Cc1	Cc0				limit
@@ -264,6 +267,41 @@ class OWAY():
             cc = min(Cc3*tts**3 + Cc2*tts**2 + Cc1*tts + Cc0, Ccmax)
         #print(cc)
         dsy = tts/cc
+        return dsy, cc
+
+    def tts2dsy(self, pf, tts):
+        # Converting TTS to DSY using quadratic equation from Jacobs Mat & Des 2023
+        # TTS = 0.00067*DSY**2 +0.49*DSY
+
+        import cmath
+
+        def positive_real_roots(a, b, c):
+            """Calculate and return only the positive, real roots of ax^2 + bx + c = 0."""
+            # Calculate the discriminant
+            discriminant = b ** 2 - 4 * a * c
+
+            # Compute the roots (could be complex)
+            root1 = (-b + cmath.sqrt(discriminant)) / (2 * a)
+            root2 = (-b - cmath.sqrt(discriminant)) / (2 * a)
+
+            # Filter for roots that are real (imag part zero) and positive
+            positive_real = []
+            for root in (root1, root2):
+                if abs(root.imag) < 1e-9 and root.real >= 0:
+                    positive_real.append(root.real)
+
+            return positive_real[0]
+
+        if tts < 0:
+            tts = 0
+
+        dsy = positive_real_roots(a=0.00067, b=0.49, c=-1*tts)
+
+        if tts == 0:
+            cc = 1
+        else:
+            cc = tts/dsy
+
         return dsy, cc
 
     def _features(self):
@@ -359,6 +397,7 @@ class JOWAY(OWAY):
                         'wt_percent_Si', 'wt_percent_C', 'log(fluence_n_cm2)', 'log(flux_n_cm2_sec)']
         return features
 
+    '''
     def tts2dsy(self, pf, tts):
         # TTS = 0.00067*dSy**2 + 0.49*dSy
         a = 0.00067
@@ -368,6 +407,7 @@ class JOWAY(OWAY):
         #print(dsy)
         cc = tts/dsy
         return dsy, cc
+    '''
 
     def predict(self, df, atr2fte=1.38e20, nn_model='Jacobs23'):
         #

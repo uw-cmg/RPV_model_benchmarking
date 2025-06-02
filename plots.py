@@ -149,11 +149,31 @@ def plot_crossplot(df, model_name_list, crossplot_variable_name, crossplot_varia
                     for f in features:
                         if f == grid_variable:
                             d[f] = [grid_value for l in range(num_points)]
+                            if grid_variable == 'log(fluence_n_cm2)':
+                                if 'fluence_n_cm2' in features:
+                                    d['fluence_n_cm2'] = [10**grid_value for l in range(num_points)]
+                            if grid_variable == 'log(flux_n_cm2_sec)':
+                                if 'flux_n_cm2_sec' in features:
+                                    d['flux_n_cm2_sec'] = [10**grid_value for l in range(num_points)]
                         elif f == crossplot_variable_name:
-                            x_vals = np.arange(crossplot_variable_min, crossplot_variable_max, crossplot_variable_max / num_points)
+                            #print('here', crossplot_variable_name)
+                            x_vals = np.arange(crossplot_variable_min, crossplot_variable_max, (crossplot_variable_max-crossplot_variable_min) / num_points)
+                            #print(x_vals)
                             d[f] = x_vals
+
                         else:
                             d[f] = [data[f] for l in range(num_points)]
+
+                    # Update these other features
+                    if crossplot_variable_name == 'log(fluence_n_cm2)':
+                        if 'fluence_n_cm2' in features:
+                            d['fluence_n_cm2'] = 10**(x_vals)
+                    if crossplot_variable_name == 'log(flux_n_cm2_sec)':
+                        if 'flux_n_cm2_sec' in features:
+                            d['flux_n_cm2_sec'] = 10**(x_vals)
+                    # Re-do the Time feature, if applicable to the model
+                    if 'Time' in features:
+                        d['Time'] = np.array(d['fluence_n_cm2']) / np.array(d['flux_n_cm2_sec'])
 
                     df_pred = pd.DataFrame(d)
 
@@ -179,8 +199,10 @@ def plot_crossplot(df, model_name_list, crossplot_variable_name, crossplot_varia
             grid_variable_str += grid_variable
             for grid_value in grid_values[j]:
                 grid_variable_str += '_'+str(grid_value)
-
-        alloy = data['alloy']
+        try:
+            alloy = data['alloy']
+        except:
+            alloy = 'test'
         plt.savefig('crossplot_'+alloy+'_'+crossplot_variable_name+'_'+grid_variable_str+'.png', dpi=300, bbox_inches='tight')
         #df.to_csv('crossplot_Cu_fluence_' + str(fluence) + '_Ni_' + str(Ni) + '_DATA.csv', index=False)
 

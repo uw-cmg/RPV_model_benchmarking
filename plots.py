@@ -16,7 +16,7 @@ colors = {'Jacobs23': 'blue', 'Jacobs24': 'green', 'Jacobs25': 'red', 'OWAY': 'p
 colors_list = ['blue', 'green', 'red', 'purple', 'orange', 'grey', 'black']
 linestyles = ['-', '--', '-.', ':']
 
-def plot_embrittlement_curve(df, model_name_list, flux_list, style='log', num_points=200, ymax=350, include_ATR2=False):
+def plot_embrittlement_curve(df, model_name_list, flux_list, style='log', num_points=200, ymax=350, include_ATR2=False, include_database_preds=True):
     # style = log, linear, sqrt
     # model_name_list = list of model names, e.g., EONY, E900, OWAY, GBR, GKRR, Jacobs23, Jacobs24
     # flux_list = list of fluxes to evaluate each model at
@@ -59,6 +59,12 @@ def plot_embrittlement_curve(df, model_name_list, flux_list, style='log', num_po
                 # Make predictions
                 preds, df_data = model.predict(df_data)
 
+                # Also make ML preds of the data from the database and add to plot
+                try:
+                    preds_data, _ = model.predict(data)
+                except:
+                    preds_data = None
+
                 if include_ATR2 == True:
                     temp_C = data['temperature_C'].iloc[0]
                     cu = data['wt_percent_Cu'].iloc[0]
@@ -74,6 +80,12 @@ def plot_embrittlement_curve(df, model_name_list, flux_list, style='log', num_po
                 alloy_comp = data['alloy'].iloc[0] + '_Cu_' + str(data['wt_percent_Cu'].iloc[0]) + '_Ni_' + str(data['wt_percent_Ni'].iloc[0]) + '_Mn_' + str(data['wt_percent_Mn'].iloc[0])
                 if model_count == 0 and flux_count == 0:
                     plt.scatter([0], [0], s=0, c='white', label=alloy_comp)
+                    if style == 'log':
+                        plt.scatter(data['log(fluence_n_cm2)'], data['Measured DT41J  [C]'], color='black', label='Database values')
+                    if style == 'linear':
+                        plt.scatter(10 ** data['log(fluence_n_cm2)'], data['Measured DT41J  [C]'], color='black', label='Database values')
+                    if style == 'sqrt':
+                        plt.scatter(np.sqrt(10 ** data['log(fluence_n_cm2)']), data['Measured DT41J  [C]'], color='black', label='Database values')
                     if include_ATR2 == True:
                         if style == 'log':
                             plt.scatter([np.log10(1.38*10**20)], [atr2_tts], color='red', label='ATR2 CF')
@@ -82,16 +94,16 @@ def plot_embrittlement_curve(df, model_name_list, flux_list, style='log', num_po
                         if style == 'sqrt':
                             plt.scatter([np.sqrt(1.38*10**20)], [atr2_tts], color='red', label='ATR2 CF')
                 if style == 'log':
-                    #alloy_data = df[df['alloy'] == data['alloy']]
-                    plt.scatter(data['log(fluence_n_cm2)'], data['Measured DT41J  [C]'], color='black')
+                    if include_database_preds == True and preds_data is not None and flux_count == 0:
+                        plt.scatter(data['log(fluence_n_cm2)'], preds_data, color=colors[model_name], marker='^', label='Database predictions', alpha=0.2)
                     plt.plot(fluences, preds, color=colors[model_name], linestyle=linestyles[flux_count], label=model_name + ' ' + 'Flux=' + str(round(flux, 3)))
                 elif style == 'linear':
-                    #alloy_data = df[df['alloy'] == data['alloy']]
-                    plt.scatter(10**data['log(fluence_n_cm2)'], data['Measured DT41J  [C]'], color='black')
+                    if include_database_preds == True and preds_data is not None and flux_count == 0:
+                        plt.scatter(10**data['log(fluence_n_cm2)'], preds_data, color=colors[model_name], marker='^', label='Database predictions', alpha=0.2)
                     plt.plot(10**fluences, preds, color=colors[model_name],  linestyle=linestyles[flux_count], label=model_name + ' ' + 'Flux=' + str(round(flux, 3)))
                 elif style == 'sqrt':
-                    #alloy_data = df[df['alloy'] == data['alloy']]
-                    plt.scatter(np.sqrt(10**data['log(fluence_n_cm2)']), data['Measured DT41J  [C]'], color='black')
+                    if include_database_preds == True and preds_data is not None and flux_count == 0:
+                        plt.scatter(np.sqrt(10**data['log(fluence_n_cm2)']), preds_data, color=colors[model_name], marker='^', label='Database predictions', alpha=0.2)
                     plt.plot(np.sqrt(10**fluences), preds, color=colors[model_name],  linestyle=linestyles[flux_count], label=model_name + ' ' + 'Flux=' + str(round(flux, 3)))
                 flux_count += 1
             model_count += 1

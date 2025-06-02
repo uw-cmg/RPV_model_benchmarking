@@ -14,6 +14,64 @@ import RPV_model_benchmarking
 from RPV_model_benchmarking.data import *
 path = RPV_model_benchmarking.__path__[0]
 
+class NaiveLinear():
+    '''
+    Naive estimator of per-plan TTS given 2 or more fluences, assuming linear scaling
+    '''
+    def __init__(self):
+        alloys_multifluence = self._get_multifluence_alloys()
+        self.alloys_multifluence = alloys_multifluence
+        return
+
+    def _get_multifluence_alloys(self):
+        # Iterate over alloys and try to find alloys with 3 different fluences, used to test naive linear model and OWAY model
+        df = DataLoader().load_rpv_data()
+        alloys = df['alloy'].unique()
+
+        alloys_multifluence = list()
+        for alloy in alloys:
+            df_sub = df[df['alloy'] == alloy]
+            fluences = df_sub['log(fluence_n_cm2)']
+            if fluences.unique().shape[0] >= 3:
+                alloys_multifluence.append(alloy)
+
+        return alloys_multifluence
+    def predict(self, df, alloy, fluence):
+        # Check the specified alloy is a multifluence alloy
+        if not alloy in self.alloys_multifluence:
+            raise ValueError('The specified alloy does not have 3 or more unique fluences, change to a suitable alloy')
+
+        df_sub = df[df['alloy'] == alloy]
+        fluences = df_sub['fluence_n_cm2']
+        trues = df_sub['Measured DT41J  [C]']
+        # Sometimes there are multiple points at one fluence. For now, just average the true TTS
+        x = list()
+        y = list()
+        for f in fluences.unique():
+            x.append(f)
+            y.append(np.mean(df_sub[df_sub['fluence_n_cm2'] == f]['Measured DT41J  [C]']))
+
+        # Do linear full fit
+        data = pd.DataFrame({'x': x, 'y': y})
+        linear = LinearRegression().fit(np.array(data['x']).reshape(-1, 1), np.array(data['y']).reshape(-1, 1))
+        preds_data = linear.predict(np.array(df_sub['fluence_n_cm2']).reshape(-1, 1))
+        slope = linear.coef_[0]
+
+        # If slope is positive, use linear model to predict the desired fluence. Otherwise, just use average value
+        if slope > 0:
+            preds = linear.predict(np.array([fluence]).reshape(-1, 1))[0]
+        else:
+            preds = np.mean(y)
+
+        df_sub['Naive linear predicted TTS (degC)'] = preds_data
+
+        # Add a new line to the alloy df that contains the new fluence and its prediction
+        df_pred = pd.DataFrame({'fluence_n_cm2': [fluence], 'Naive linear predicted TTS (degC)': preds})
+
+        df_together = pd.concat([df_sub, df_pred])
+
+        return preds, df_together
+
 class E900():
     # E900 MODEL
 

@@ -5,8 +5,11 @@ Benchmarking and analysis of different models of reactor pressure vessel steel e
 The contents of this repository, including both the generation and assimilation of raw data and creation of models, was developed by:
 
 Ryan Jacobs, University of Wisconsin-Madison
+
 Dane Morgan, University of Wisconsin-Madison
+
 Takuya Yamamoto, University of California- Santa Barbara
+
 G. Robert Odette, University of California- Santa Barbara
 
 ## Run example notebooks in Google Colab:

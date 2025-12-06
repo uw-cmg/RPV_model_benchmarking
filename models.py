@@ -413,7 +413,7 @@ class OWAY():
                     atr2dsyti = self.atr2cfti(temp_c, atr2dsy292)
                     owaydsy = (atr2dsyti - dsy_4e19) / (atr2fte - 4e19) * (fluence - 4e19) + dsy_4e19
                     owaytts = owaydsy * cc
-                    oway_tts.append(owaytts[0])
+                    oway_tts.append(owaytts)
                 else:
                     # Get fit line of TTS vs. fluence and ATR2 point, then predict the prediction of interest back
                     # Just need this to get cc value
@@ -431,7 +431,7 @@ class OWAY():
                     linear = LinearRegression()
                     linear.fit(np.array(x).reshape(-1,1), np.array(y).reshape(-1, 1))
                     owaytts = linear.predict(np.array([fluence]).reshape(-1,1))
-                    oway_tts.append(owaytts[0][0])
+                    oway_tts.append(owaytts[0])
 
             else:
                 preds, _ = EONY().predict(df_eony)
@@ -440,7 +440,7 @@ class OWAY():
                 atr2dsyti = self.atr2cfti(temp_c, atr2dsy292)
                 owaydsy = (atr2dsyti - dsy_4e19) / (atr2fte - 4e19) * (fluence - 4e19) + dsy_4e19
                 owaytts = owaydsy*cc
-                oway_tts.append(owaytts[0])
+                oway_tts.append(owaytts)
         #print(oway_tts)
         df['OWAY predicted TTS (degC)'] = oway_tts
         return np.array(oway_tts), df

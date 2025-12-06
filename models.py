@@ -9,6 +9,7 @@ from keras.models import Sequential
 from keras.layers import Dense, Dropout, BatchNormalization
 from scikeras.wrappers import KerasRegressor
 from sklearn.linear_model import LinearRegression
+from sklearn.metrics import r2_score, mean_absolute_error
 
 import RPV_model_benchmarking
 from RPV_model_benchmarking.data import *

@@ -367,7 +367,7 @@ class OWAY():
                     'wt_percent_P', 'flux_n_cm2_sec', 'fluence_n_cm2']
         return features
 
-    def predict(self, df, atr2fte=1.38e20, query_database=False, fluence_threshold=3e19):
+    def predict(self, df, atr2fte=1.38e20, query_database=False, fluence_threshold=3e19, remove_highest_fluence=False):
         #
         #   OWAY model using linear interpolation between EONY DSY@4E19 and ATR2CF at ATR2fte
         #   for a desired fluence for prediction
@@ -379,8 +379,11 @@ class OWAY():
         #
         #tts_4e19 = eony_tts(pf, temp_c, wt_cu, wt_ni, wt_mn, wt_p, 4e19, flux)
         oway_tts = list()
+        oway_r2 = list()
+        oway_mae = list()
+        oway_usedeony = list()
         if query_database == True:
-            df = DataLoader().load_rpv_data()
+            df_data = DataLoader().load_rpv_data()
 
         for i, d in df.iterrows():
             pf = d['Product Form']
@@ -404,19 +407,31 @@ class OWAY():
             # Try to query database to get TTS of actual material for OWAY prediction, otherwise use EONY model
             if query_database == True:
                 # Try to find the exact composition in the database
-                filtered_df = df[(df['fluence_n_cm2'] > fluence_threshold) & (df['wt_percent_Cu'] == wt_cu) & (df['wt_percent_Ni'] == wt_ni) & (df['wt_percent_Mn'] == wt_mn) & (df['wt_percent_P'] == wt_p) & (df['wt_percent_Si'] == wt_si)]
+                filtered_df = df_data[(df_data['fluence_n_cm2'] > fluence_threshold) & (df_data['wt_percent_Cu'] == wt_cu) & (df_data['wt_percent_Ni'] == wt_ni) & (df_data['wt_percent_Mn'] == wt_mn) & (df_data['wt_percent_P'] == wt_p) & (df_data['wt_percent_Si'] == wt_si)]
+
+                if filtered_df.shape[0] >= 1:
+                    if remove_highest_fluence == True:
+                        max_fluence = max(filtered_df['log(fluence_n_cm2)'])
+                        filtered_df = filtered_df[filtered_df['log(fluence_n_cm2)'] != max_fluence]
 
                 if filtered_df.shape[0] < 1:
+                    oway_usedeony.append(True)
                     preds, _ = EONY().predict(df_eony)
                     dsy_4e19, cc = self.tts2dsy(pf, preds)
                     atr2dsy292 = self.atr2cf292(wt_cu, wt_ni, wt_mn, wt_si, wt_p)
                     atr2dsyti = self.atr2cfti(temp_c, atr2dsy292)
                     owaydsy = (atr2dsyti - dsy_4e19) / (atr2fte - 4e19) * (fluence - 4e19) + dsy_4e19
                     owaytts = owaydsy * cc
-                    oway_tts.append(owaytts)
+                    try:
+                        oway_tts.append(owaytts[0])
+                    except:
+                        oway_tts.append(owaytts)
+                    oway_mae.append(np.nan)
+                    oway_r2.append(np.nan)
                 else:
                     # Get fit line of TTS vs. fluence and ATR2 point, then predict the prediction of interest back
                     # Just need this to get cc value
+                    oway_usedeony.append(False)
                     preds_ = np.array([np.mean(filtered_df['Measured DT41J  [C]'])])
                     dsy_4e19, cc = self.tts2dsy(pf, preds_)
                     atr2dsy292 = self.atr2cf292(wt_cu, wt_ni, wt_mn, wt_si, wt_p)
@@ -426,23 +441,37 @@ class OWAY():
                     x.append(1.38e20)
                     y = list(filtered_df['Measured DT41J  [C]'])
                     y.append(float(atr2_tts))
-                    #print(x)
-                    #print(y)
                     linear = LinearRegression()
                     linear.fit(np.array(x).reshape(-1,1), np.array(y).reshape(-1, 1))
                     owaytts = linear.predict(np.array([fluence]).reshape(-1,1))
-                    oway_tts.append(owaytts[0])
+                    oway_preds = linear.predict(np.array(x).reshape(-1,1))
+                    oway_tts.append(owaytts[0][0])
+                    trues = np.array(y).reshape(-1, 1)
+                    r2 = r2_score(trues, oway_preds)
+                    mae = mean_absolute_error(trues, oway_preds)
+                    oway_mae.append(mae)
+                    oway_r2.append(r2)
 
             else:
+                oway_usedeony.append(True)
                 preds, _ = EONY().predict(df_eony)
                 dsy_4e19, cc = self.tts2dsy(pf, preds)
                 atr2dsy292 = self.atr2cf292(wt_cu, wt_ni, wt_mn, wt_si, wt_p)
                 atr2dsyti = self.atr2cfti(temp_c, atr2dsy292)
                 owaydsy = (atr2dsyti - dsy_4e19) / (atr2fte - 4e19) * (fluence - 4e19) + dsy_4e19
                 owaytts = owaydsy*cc
-                oway_tts.append(owaytts)
+                try:
+                    oway_tts.append(owaytts[0])
+                except:
+                    oway_tts.append(owaytts)
+                oway_mae.append(np.nan)
+                oway_r2.append(np.nan)
         #print(oway_tts)
         df['OWAY predicted TTS (degC)'] = oway_tts
+        df['OWAY EONY model used'] = oway_usedeony
+        df['OWAY linear fit R2'] = oway_r2
+        df['OWAY linear fit MAE'] = oway_mae
+
         return np.array(oway_tts), df
 
 class JOWAY(OWAY):

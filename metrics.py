@@ -14,7 +14,7 @@ class Metrics():
     def get_me(self, df, model_name):
         # model_name = EONY, E900, OWAY, GKRR, GBR, Jacobs23, Jacobs24
         trues = df['Measured DT41J  [C]']
-        if model_name in ['Jacobs23', 'Jacobs24', 'Jacobs25']:
+        if model_name in ['Jacobs23', 'Jacobs24', 'Jacobs25', 'Jacobs26']:
             try:
                 preds = df[model_name+' NN ensemble predicted TTS (degC)']
             except:
@@ -27,7 +27,7 @@ class Metrics():
     def get_mae(self, df, model_name):
         # model_name = EONY, E900, OWAY, GKRR, GBR, Jacobs23, Jacobs24
         trues = df['Measured DT41J  [C]']
-        if model_name in ['Jacobs23', 'Jacobs24', 'Jacobs25']:
+        if model_name in ['Jacobs23', 'Jacobs24', 'Jacobs25', 'Jacobs26']:
             try:
                 preds = df[model_name+' NN ensemble predicted TTS (degC)']
             except:
@@ -40,13 +40,14 @@ class Metrics():
     def get_rmse(self, df, model_name):
         # model_name = EONY, E900, OWAY, GKRR, GBR, Jacobs23, Jacobs24
         trues = df['Measured DT41J  [C]']
-        if model_name in ['Jacobs23', 'Jacobs24', 'Jacobs25']:
+        if model_name in ['Jacobs23', 'Jacobs24', 'Jacobs25', 'Jacobs26']:
             try:
                 preds = df[model_name+' NN ensemble predicted TTS (degC)']
             except:
                 preds = df['NN ensemble predicted TTS (degC) '+model_name]
         else:
             preds = df[model_name+' predicted TTS (degC)']
+
         rmse = np.sqrt(mean_squared_error(trues, preds))
         return rmse
 
@@ -84,11 +85,40 @@ class Benchmarking(Metrics):
         super(Benchmarking, self).__init__()
         return
 
-    def get_5fold_benchmarks(self, model_name):
-        # model_name = EONY, E900, GKRR, GBR, Jacobs23, Jacobs24
+    def get_5fold_benchmarks(self, model_name, anchors='2025'):
+        # model_name = EONY, E900, GKRR, GBR, Jacobs23, Jacobs24, Jacobs25
+        # If using Jacobs25, need to specify 2023 or 2025 for anchor types
 
         # Get the 5fold df based on model name
-        model_path = os.path.join(os.path.join(path, 'model_files'), model_name+'/5fold')
+        if model_name != 'Jacobs25':
+            if model_name == 'Jacobs26':
+                if anchors == '2026':
+                    model_path = os.path.join(os.path.join(path, 'model_files'), model_name+'/5fold')
+                elif anchors == 'None':
+                    model_path = os.path.join(os.path.join(path, 'model_files'), model_name+'/5fold_noanchors')
+            else:
+                model_path = os.path.join(os.path.join(path, 'model_files'), model_name+'/5fold')
+        else:
+            if anchors == '2023':
+                model_path = os.path.join(os.path.join(path, 'model_files'), model_name + '/5fold_2023anchors')
+            elif anchors == '2025':
+                model_path = os.path.join(os.path.join(path, 'model_files'), model_name + '/5fold_2025anchors')
+            elif anchors == '2025_v2':
+                model_path = os.path.join(os.path.join(path, 'model_files'), model_name + '/5fold_2025anchors_v2')
+            elif anchors == '2023_thermofeatures':
+                model_path = os.path.join(os.path.join(path, 'model_files'), model_name + '/5fold_2023anchors_thermofeatures')
+            elif anchors == '2025_v2_thermofeatures':
+                model_path = os.path.join(os.path.join(path, 'model_files'), model_name + '/5fold_2025anchors_v2_thermofeatures')
+            elif anchors == '2023_thermofeatures_Avrami':
+                model_path = os.path.join(os.path.join(path, 'model_files'), model_name + '/5fold_2023anchors_thermofeatures_Avrami')
+            elif anchors == '2025_v2_thermofeatures_Avrami':
+                model_path = os.path.join(os.path.join(path, 'model_files'), model_name + '/5fold_2025anchors_v2_thermofeatures_Avrami')
+            elif anchors == 'paperdraft':
+                model_path = os.path.join(os.path.join(path, 'model_files'), model_name + '/5fold')
+            elif anchors == '2025_v2_efffluence':
+                model_path = os.path.join(os.path.join(path, 'model_files'), model_name + '/5fold_2025anchors_v2_efffluence')
+            elif anchors == '2025_v2_efffluence_e900eony':
+                model_path = os.path.join(os.path.join(path, 'model_files'), model_name + '/5fold_2025anchors_v2_efffluence_e900eony')
 
         if model_name == 'E900':
             df0 = pd.read_csv(os.path.join(model_path, 'e900_5fold_split_0.csv'))
@@ -110,7 +140,7 @@ class Benchmarking(Metrics):
             ytrue = pd.read_csv(os.path.join(model_path, 'y_test.csv'))
             ypred = pd.read_csv(os.path.join(model_path, 'y_pred.csv'))
             df = pd.concat([ytrue, ypred, X, Xextra], axis=1)
-            if model_name in ['Jacobs23', 'Jacobs24', 'Jacobs25']:
+            if model_name in ['Jacobs23', 'Jacobs24', 'Jacobs25', 'Jacobs26']:
                 #pred_name = 'NN ensemble predicted TTS (degC) ' + model_name
                 pred_name = model_name + ' NN ensemble predicted TTS (degC)'
             else:
@@ -136,6 +166,7 @@ class Benchmarking(Metrics):
         rmse_hightts = Metrics().get_rmse(df_hightts, model_name=model_name)
         rmse_hightts_plotter = Metrics().get_rmse(df_hightts_plotter, model_name=model_name)
         rmse_lowCu_plotter = Metrics().get_rmse(df_lowCu_plotter, model_name=model_name)
+        rmse_peralloy, alloys = Metrics().get_metric_per_alloy(df_plotter, metric_name='RMSE', model_name=model_name)
 
         data = {'RMSE, all': rmse_all,
                 'RMSE, Plotter': rmse_plotter,
@@ -143,6 +174,7 @@ class Benchmarking(Metrics):
                 'RMSE, high fluence Plotter': rmse_highfluence_plotter,
                 'RMSE, high TTS': rmse_hightts,
                 'RMSE, high TTS Plotter': rmse_hightts_plotter,
-                'RMSE, low Cu Plotter': rmse_lowCu_plotter}
+                'RMSE, low Cu Plotter': rmse_lowCu_plotter,
+                'RMSE, per alloy (average +/- stdev)': [np.mean(rmse_peralloy), np.std(rmse_peralloy)]}
 
         return data

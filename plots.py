@@ -9,13 +9,13 @@ import RPV_model_benchmarking
 path = RPV_model_benchmarking.__path__[0]
 
 from RPV_model_benchmarking.models import XGBoost, EONY, E900, OWAY, JOWAY, GBR, GKRR, EnsembleNN_Jacobs23, EnsembleNN_Jacobs24, EnsembleNN_Jacobs25, EnsembleNN_Jacobs25_BWR, EnsembleNN_Jacobs25_PWR, EnsembleNN_Jacobs25_Bob, EnsembleNN_Jacobs26
-models = {'EONY': EONY(), 'E900': E900(), 'OWAY': OWAY(), 'JOWAY': JOWAY(), 'GBR': GBR(), 'GKRR': GKRR(),
+models = {'EONY': EONY(), 'E900': E900(), 'OWAY': OWAY(), 'ML-OWAY': JOWAY(), 'GBR': GBR(), 'GKRR': GKRR(),
           'Jacobs23': EnsembleNN_Jacobs23(), 'Jacobs24': EnsembleNN_Jacobs24(), 'Jacobs25': EnsembleNN_Jacobs25(),
           'Jacobs25_BWR': EnsembleNN_Jacobs25_BWR(), 'Jacobs25_PWR': EnsembleNN_Jacobs25_PWR(),
           'Jacobs25_Bob': EnsembleNN_Jacobs25_Bob(),
           'XGBoost': XGBoost(), 'Jacobs26': EnsembleNN_Jacobs26()}
 colors = {'Jacobs23': 'blue', 'Jacobs24': 'green', 'Jacobs25': 'red', 'Jacobs25_BWR': 'red', 'Jacobs25_PWR': 'red', 'Jacobs25_Bob': 'red', 'OWAY': 'purple', 'GBR': 'red', 'EONY': 'orange',
-          'E900': 'grey', 'GKRR': 'black', 'JOWAY': 'blue', 'XGBoost': 'blue','Jacobs26': 'red'}
+          'E900': 'grey', 'GKRR': 'black', 'ML-OWAY': 'blue', 'XGBoost': 'blue', 'Jacobs26': 'red'}
 colors_list = ['blue', 'green', 'red', 'purple', 'orange', 'grey', 'black']
 linestyles = ['-', '--', '-.', ':']
 
@@ -126,14 +126,17 @@ def plot_embrittlement_curve(df,
                              smoothing_window=11,
                              smoothing_order=3,
                              use_alloy_flux=False,
-                             joway_model='Jacobs26'):
+                             joway_model='Jacobs26',
+                             nn_ebars=False,
+                             nn_domain=False,
+                             domain_d=0.99):
     # style = log, linear, sqrt
     # model_name_list = list of model names, e.g., EONY, E900, OWAY, GBR, GKRR, Jacobs23, Jacobs24
     # flux_list = list of fluxes to evaluate each model at
     # This used to just iterate over all rows in df, but that repeats many alloys. Now, just iterate over unique alloys
 
     alloys = df['alloy'].unique()
-    fluences = np.arange(16.5, 21, (21 - 16.5) / num_points)
+    fluences = np.arange(16.5, xmax, (xmax - 16.5) / num_points)
     #for i, data in df.iterrows():
     for alloy in alloys:
         print('On alloy', alloy)
@@ -149,7 +152,7 @@ def plot_embrittlement_curve(df,
             model = models[model_name]
             if 'Jacobs25' in model_name:
                 features = model._features(anchors=anchors[i])
-            elif 'JOWAY' in model_name:
+            elif 'ML-OWAY' in model_name:
                 features = model._features()
                 model_nn = models[joway_model]
                 features_nn = model_nn._features()
@@ -229,9 +232,11 @@ def plot_embrittlement_curve(df,
                     df_data = df_data.drop(['effective_fluence', 'at_percent_Cu', 'at_percent_Ni', 'at_percent_Mn', 'at_percent_Si', 'at_percent_C', 'at_percent_P'], axis=1)
 
                 # Make predictions
-                if model_name == 'Jacobs25' or model_name == 'XGBoost' or model_name == 'Jacobs26':
+                if model_name == 'Jacobs25' or model_name == 'Jacobs26':
+                    preds, df_data = model.predict(df_data, anchors=anchors[i], return_ebars=nn_ebars, return_domains=nn_domain)
+                elif model_name == 'XGBoost':
                     preds, df_data = model.predict(df_data, anchors=anchors[i])
-                elif model_name == 'JOWAY':
+                elif model_name == 'ML-OWAY':
                     preds, df_data = model.predict(df_data, nn_model=joway_model)
                 else:
                     preds, df_data = model.predict(df_data)
@@ -239,9 +244,11 @@ def plot_embrittlement_curve(df,
 
                 # Also make ML preds of the data from the database and add to plot
                 try:
-                    if model_name == 'Jacobs25' or model_name == 'XGBoost' or model_name == 'Jacobs26':
+                    if model_name == 'Jacobs25' or model_name == 'Jacobs26':
+                        preds_data, _ = model.predict(data, anchors=anchors[i], return_ebars=nn_ebars, return_domains=nn_domain)
+                    elif model_name == 'XGBoost':
                         preds_data, _ = model.predict(data, anchors=anchors[i])
-                    elif model_name == 'JOWAY':
+                    elif model_name == 'ML-OWAY':
                         preds_data, _ = model.predict(data, nn_model=joway_model)
                     else:
                         preds_data, _ = model.predict(data)
@@ -279,91 +286,132 @@ def plot_embrittlement_curve(df,
                     plt.scatter([0], [0], s=0, c='white', label=alloy_comp)
                     if style == 'log':
                         try:
-                            plt.scatter(data['log(fluence_n_cm2)'], data['Measured DT41J  [C]'], color='black', label='Database values')
+                            plt.scatter(data['log(fluence_n_cm2)'], data['Measured DT41J  [C]'], color='black', label='Database values', s=50)
                         except:
                             pass
                     if style == 'linear':
                         try:
-                            plt.scatter(10 ** data['log(fluence_n_cm2)'], data['Measured DT41J  [C]'], color='black', label='Database values')
+                            plt.scatter(10 ** data['log(fluence_n_cm2)'], data['Measured DT41J  [C]'], color='black', label='Database values', s=50)
                         except:
                             pass
                     if style == 'sqrt':
                         try:
-                            plt.scatter(np.sqrt(10 ** data['log(fluence_n_cm2)']), data['Measured DT41J  [C]'], color='black', label='Database values')
+                            plt.scatter(np.sqrt(10 ** data['log(fluence_n_cm2)']), data['Measured DT41J  [C]'], color='black', label='Database values', s=50)
                         except:
                             pass
                     if include_ATR2 == True:
                         if style == 'log':
-                            plt.scatter([np.log10(1.38*10**20)], [atr2_tts], color='red', label='ATR2 CF')
+                            plt.scatter([np.log10(1.38*10**20)], [atr2_tts], color='red', label='ATR2 CF', s=50 )
                         if style == 'linear':
-                            plt.scatter([1.38*10**20], [atr2_tts], color='red', label='ATR2 CF')
+                            plt.scatter([1.38*10**20], [atr2_tts], color='red', label='ATR2 CF', s=50)
                         if style == 'sqrt':
-                            plt.scatter([np.sqrt(1.38*10**20)], [atr2_tts], color='red', label='ATR2 CF')
+                            plt.scatter([np.sqrt(1.38*10**20)], [atr2_tts], color='red', label='ATR2 CF', s=50)
                 flux_label = label = f"{flux:.2e}"
                 if style == 'log':
                     if include_database_preds == True and preds_data is not None and flux_count == 0:
-                        plt.scatter(data['log(fluence_n_cm2)'], preds_data, color=colors[model_name], marker='^', label='Database predictions', alpha=0.2)
-                    if model_name in ['Jacobs26']:
-                        if i == 1:
-                            color = colors[model_name]
-                        else:
-                            color = 'blue'
+                        plt.scatter(data['log(fluence_n_cm2)'], preds_data, color=colors[model_name], marker='^', s=50, label='Database predictions', alpha=0.2)
+                    if model_name in ['Jacobs23', 'Jacobs26']:
+                        #if i == 1:
+                        color = colors[model_name]
+                        #else:
+                        #    color = 'blue'
                         plt.plot(fluences, preds, color=color, linestyle=linestyles[flux_count],
                                  label=model_name + ' ' + anchors[i] + ' Flux=' + str(flux_label))
+                        if nn_ebars == True:
+                            ebars = df_data[model_name+' NN ensemble error bars (degC)']
+                            plt.fill_between(fluences, preds+ebars, preds-ebars, color=color, alpha=0.5)
+                        if nn_domain == True:
+                            domains = df_data['Jacobs26 NN ensemble domain d']
+                            for i in range(fluences.shape[0]):
+                                # Plot each point with its specific marker
+                                if domains[i] > domain_d: #0.902
+                                    marker = 'x'
+                                else:
+                                    marker = 'o'
+                                plt.scatter(fluences[i], preds[i], marker=marker, color=colors[model_name], s=50, alpha=0.2)  # s is marker size
+
                     else:
                         plt.plot(fluences, preds, color=colors[model_name], linestyle=linestyles[flux_count], label=model_name + ' ' + 'Flux=' + str(flux_label))
                 elif style == 'linear':
                     if include_database_preds == True and preds_data is not None and flux_count == 0:
-                        plt.scatter(10**data['log(fluence_n_cm2)'], preds_data, color=colors[model_name], marker='^', label='Database predictions', alpha=0.2)
-                    if model_name in ['Jacobs26']:
-                        if i == 1:
-                            color = colors[model_name]
-                        else:
-                            color = 'blue'
+                        plt.scatter(10**data['log(fluence_n_cm2)'], preds_data, color=colors[model_name], marker='^', s=50, label='Database predictions', alpha=0.2)
+                    if model_name in ['Jacobs23', 'Jacobs26']:
+                        #if i == 1:
+                        color = colors[model_name]
+                        #else:
+                        #    color = 'blue'
                         plt.plot(10 ** fluences, preds, color=color, linestyle=linestyles[flux_count],
                                  label=model_name + ' ' + anchors[i] + ' Flux=' + str(flux_label))
+                        if nn_ebars == True:
+                            ebars = df_data[model_name+' NN ensemble error bars (degC)']
+                            plt.fill_between(10**fluences, preds+ebars, preds-ebars, color=color, alpha=0.5)
+                        if nn_domain == True:
+                            domains = df_data['Jacobs26 NN ensemble domain d']
+                            for i in range(fluences.shape[0]):
+                                # Plot each point with its specific marker
+                                if domains[i] > domain_d:
+                                    marker = 'x'
+                                else:
+                                    marker = 'o'
+                                plt.scatter(10**fluences[i], preds[i], marker=marker, color=colors[model_name], s=50, alpha=0.2)  # s is marker size
+
                     else:
                         plt.plot(10**fluences, preds, color=colors[model_name],  linestyle=linestyles[flux_count], label=model_name + ' ' + 'Flux=' + str(flux_label))
                 elif style == 'sqrt':
                     if include_database_preds == True and preds_data is not None and flux_count == 0:
-                        plt.scatter(np.sqrt(10**data['log(fluence_n_cm2)']), preds_data, color=colors[model_name], marker='^', label='Database predictions', alpha=0.2)
-                    if model_name in ['Jacobs26']:
-                        if i == 1:
-                            color = colors[model_name]
-                        else:
-                            color = 'blue'
+                        plt.scatter(np.sqrt(10**data['log(fluence_n_cm2)']), preds_data, color=colors[model_name], s=50, marker='^', label='Database predictions', alpha=0.2)
+                    if model_name in ['Jacobs23', 'Jacobs26']:
+                        #if i == 1:
+                        color = colors[model_name]
+                        #else:
+                        #    color = 'blue'
                         plt.plot(np.sqrt(10 ** fluences), preds, color=color,
                                  linestyle=linestyles[flux_count], label=model_name + ' ' + anchors[i] + ' Flux=' + str(flux_label))
+                        if nn_ebars == True:
+                            ebars = df_data[model_name+' NN ensemble error bars (degC)']
+                            plt.fill_between(np.sqrt(10**fluences), preds+ebars, preds-ebars, color=color, alpha=0.5)
+                        if nn_domain == True:
+                            domains = df_data['Jacobs26 NN ensemble domain d']
+                            for i in range(fluences.shape[0]):
+                                # Plot each point with its specific marker
+                                if domains[i] > 0.902:
+                                    marker = 'x'
+                                else:
+                                    marker = 'o'
+                                plt.scatter(np.sqrt(10**fluences[i]), preds[i], marker=marker, color=colors[model_name], s=50, alpha=0.2)  # s is marker size
+
                     else:
                         plt.plot(np.sqrt(10**fluences), preds, color=colors[model_name],  linestyle=linestyles[flux_count], label=model_name + ' ' + 'Flux=' + str(flux_label))
                 flux_count += 1
             model_count += 1
 
         # All models and fluxes plotted for this alloy
+        plt.xticks(fontsize=10)
+        plt.yticks(fontsize=10)
         if style == 'log':
             plt.ylim(-10, ymax)
             plt.xlim(xmin, xmax)
-            plt.ylabel('Predicted TTS ($\degree$C)')
+            plt.ylabel('Predicted TTS ($\degree$C)', fontsize=10)
             plt.legend(loc='best', fontsize=legendfontsize)
             #plt.xlim(16.5, 20.30103)  # 2*10**20
-            plt.xlabel('log fluence (n/cm$^2$)')
+            plt.xlabel('log fluence (n/cm$^2$)', fontsize=10)
             plt.savefig('embrittlement_curve_' + alloy_comp + '_logfluence.png', bbox_inches='tight', dpi=300)
         elif style == 'linear':
             plt.ylim(-10, ymax)
-            plt.xlim(xmin, xmax)
-            plt.ylabel('Predicted TTS ($\degree$C)')
+            plt.xlim(10**xmin, 10**xmax)
+            plt.ylabel('Predicted TTS ($\degree$C)', fontsize=10)
             plt.legend(loc='best', fontsize=legendfontsize)
             #plt.xlim(0.0, 2.0 * 10 ** 20)  # 2*10**20
-            plt.xlabel('fluence (n/cm$^2$)')
+            plt.xlabel('fluence (n/cm$^2$)', fontsize=10)
             #plt.savefig('embrittlement_curve_' + alloy_comp + '_linearfluence.png', bbox_inches='tight', dpi=300)
             plt.savefig(alloy_comp + '_linearfluence.png', bbox_inches='tight', dpi=300)
         elif style == 'sqrt':
             plt.ylim(-10, ymax)
-            plt.xlim(xmin, xmax)
-            plt.ylabel('Predicted TTS ($\degree$C)')
+            plt.xlim(np.sqrt(10**xmin), np.sqrt(10**xmax))
+            plt.ylabel('Predicted TTS ($\degree$C)', fontsize=10)
             plt.legend(loc='best', fontsize=legendfontsize)
             #plt.xlim(0.0, 1.41 * 10 ** 10)
-            plt.xlabel('sqrt fluence (n/cm$^2$)')
+            plt.xlabel('sqrt fluence (n/cm$^2$)', fontsize=10)
             plt.savefig('embrittlement_curve_' + alloy_comp + '_sqrtfluence.png', bbox_inches='tight', dpi=300)
 
         df_all = pd.concat(dfs)

@@ -6,6 +6,12 @@ import joblib
 import tensorflow as tf
 from tensorflow.keras import layers
 from copy import copy
+import dill
+
+import io
+import zipfile
+import tempfile
+import scikeras._saving_utils as scu
 
 from mastml.models import EnsembleModel
 import keras
@@ -19,7 +25,6 @@ import RPV_model_benchmarking
 from RPV_model_benchmarking.data import *
 
 path = RPV_model_benchmarking.__path__[0]
-
 @keras.saving.register_keras_serializable(package="Custom")
 class DerivativePenaltyModel(tf.keras.Model):
     """
@@ -113,6 +118,63 @@ class DerivativePenaltyModel(tf.keras.Model):
             "flux_pen": flux_pen,
             "mae": mae,
         }
+
+# Fixing issue with loading model.dill domain file for Jacobs26
+# ------------------------------------------------------------
+# 1) Rebuild the SAME architecture used inside model.dill
+#    Adjust this if the domain model architecture differs.
+# ------------------------------------------------------------
+def build_domain_infer_model(input_dim=11):
+    inp = tf.keras.layers.Input(shape=(input_dim,))
+    x = tf.keras.layers.Dense(1024, activation="relu")(inp)
+    x = tf.keras.layers.Dropout(0.3)(x)
+    x = tf.keras.layers.Dense(1024, activation="relu")(x)
+    x = tf.keras.layers.Dropout(0.3)(x)
+
+    # Adjust final layer if needed:
+    # regression / single score:
+    out = tf.keras.layers.Dense(1)(x)
+
+    # binary classifier alternative:
+    # out = tf.keras.layers.Dense(1, activation="sigmoid")(x)
+
+    # multiclass alternative:
+    # out = tf.keras.layers.Dense(n_classes, activation="softmax")(x)
+
+    model = tf.keras.Model(inp, out, name="domain_infer_model")
+    return model
+
+
+# ------------------------------------------------------------
+# 2) Monkeypatch SciKeras unpacker
+# ------------------------------------------------------------
+
+def patched_unpack_keras_model(packed_keras_model):
+    """
+    SciKeras stores a packed .keras archive in bytes.
+    This function reconstructs a plain Functional model
+    directly from model.weights.h5 inside that archive.
+    """
+    b = io.BytesIO(packed_keras_model)
+
+    with zipfile.ZipFile(b, "r") as zf:
+        names = zf.namelist()
+        print("Packed archive contents:", names)
+
+        with tempfile.TemporaryDirectory() as td:
+            zf.extract("model.weights.h5", path=td)
+            wpath = os.path.join(td, "model.weights.h5")
+
+            # IMPORTANT: set the correct input dimension
+            input_dim = 11
+
+            model = build_domain_infer_model(input_dim=input_dim)
+
+            # build variables before loading weights
+            _ = model(tf.zeros((1, input_dim), dtype=tf.float32))
+
+            model.load_weights(wpath)
+            return model
 
 class NaiveLinear():
     '''
@@ -1311,9 +1373,10 @@ class EnsembleNN_Jacobs26():
 
         return model_bagged_keras_rebuild
 
-    def _get_preds_ebars(self, model, df_featurized, preprocessor, return_ebars=True):
+    def _get_preds_ebars(self, model, df_featurized, preprocessor, return_ebars=True, return_domains=True):
         preds_each = list()
         ebars_each = list()
+        domains_each = list()
 
         df_featurized_scaled = preprocessor.transform(pd.DataFrame(df_featurized))
 
@@ -1332,6 +1395,20 @@ class EnsembleNN_Jacobs26():
             except:
                 ebars_each = [np.nan]
 
+        if return_domains == True:
+            # Get domains
+            _original_unpack = scu.unpack_keras_model
+            scu.unpack_keras_model = patched_unpack_keras_model
+            with open(os.path.join('model_files/Jacobs26/domain', 'model.dill'), 'rb') as f:
+                model_domain = dill.load(f)
+            domains_each = model_domain.predict(df_featurized_scaled)
+            domains_each = domains_each['d_pred']
+        else:
+            try:
+                domains_each = [np.nan for i in range(np.array(preds_each).shape[0])]
+            except:
+                domains_each = [np.nan]
+
         if return_ebars == True:
             # Jacobs 26 model recalibration
             a = 1.300052530566834
@@ -1344,7 +1421,7 @@ class EnsembleNN_Jacobs26():
         else:
             ebars_each_recal = ebars_each
 
-        return np.array(preds_each).ravel(), np.array(ebars_each_recal).ravel()
+        return np.array(preds_each).ravel(), np.array(ebars_each_recal).ravel(), np.array(domains_each).ravel()
 
     def _features(self):
         features = ['temperature_C', 'wt_percent_Cu', 'wt_percent_Ni', 'wt_percent_Mn', 'wt_percent_P',
@@ -1352,7 +1429,7 @@ class EnsembleNN_Jacobs26():
                     'flux_n_cm2_sec']
         return features
 
-    def predict(self, df, anchors='2026', return_ebars=False):
+    def predict(self, df, anchors='2026', return_ebars=False, return_domains=False):
         # anchors = 2023 or 2025
         features = self._features()
         if anchors == '2026':
@@ -1360,7 +1437,6 @@ class EnsembleNN_Jacobs26():
         elif anchors == 'None':
             model_folder = os.path.join(path, 'model_files/Jacobs26/fullfit_noanchors')
 
-        print('model folder', model_folder)
         df_features = df[features]
 
         # Rebuild the saved model
@@ -1371,10 +1447,11 @@ class EnsembleNN_Jacobs26():
         preprocessor = joblib.load(os.path.join(model_folder, 'StandardScaler.pkl'))
 
         # Get predictions and error bars from model
-        preds, ebars = self._get_preds_ebars(model, df_features, preprocessor, return_ebars=return_ebars)
+        preds, ebars, domains = self._get_preds_ebars(model, df_features, preprocessor, return_ebars=return_ebars, return_domains=return_domains)
 
         pred_dict = {'Jacobs26 NN ensemble predicted TTS (degC)': preds,
-                     'Jacobs26 NN ensemble error bars (degC)': ebars}
+                     'Jacobs26 NN ensemble error bars (degC)': ebars,
+                     'Jacobs26 NN ensemble domain d': domains}
 
         for k, v in pred_dict.items():
             df[k] = v

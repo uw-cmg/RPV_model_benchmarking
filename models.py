@@ -1399,8 +1399,12 @@ class EnsembleNN_Jacobs26():
             # Get domains
             _original_unpack = scu.unpack_keras_model
             scu.unpack_keras_model = patched_unpack_keras_model
-            with open(os.path.join('model_files/Jacobs26/domain', 'model.dill'), 'rb') as f:
-                model_domain = dill.load(f)
+            try:
+                with open(os.path.join('model_files/Jacobs26/domain', 'model.dill'), 'rb') as f:
+                    model_domain = dill.load(f)
+            except:
+                with open(os.path.join('RPV_model_benchmarking/model_files/Jacobs26/domain', 'model.dill'), 'rb') as f:
+                    model_domain = dill.load(f)
             domains_each = model_domain.predict(df_featurized_scaled)
             domains_each = domains_each['d_pred']
         else:

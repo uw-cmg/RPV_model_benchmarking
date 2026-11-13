@@ -35,4 +35,6 @@ If you find any of the models useful, please cite their respective original refe
 
 **Jacobs23 NN**: Jacobs, R., Yamamoto, T., Odette, G. R., Morgan, D. Materials and Design, 236 (2023), https://doi.org/10.1016/j.matdes.2023.112491
 
-**Jacobs26 NN**: This paper is in preparation!
+**Jacobs26 NN**: Jacobs, R., Yamamoto, T., Odette, G. R., Morgan, D. Materials and Design, 269 (2026), https://doi.org/10.1016/j.matdes.2026.116668
+
+**OWAY and ML-OWAY**: This paper is in preparation!

@@ -1,0 +1,10 @@
+{
+  "source_file": "/Users/ryanjacobs/Documents/Research Projects/RPV_hardening/RPV_codex/df_atr2_withCF.csv",
+  "source_SHA256": "70e8e5b7099d1b6aad2bcadcad99b952fff07adee1bbc00f4bc0273e4344c76c",
+  "supplied_rows": 50,
+  "target": "delta_sigma_y_MPa",
+  "legacy_cached_prediction_column": "ATR2 CF pred; retained as source data but never used by the validation script",
+  "temperature_convention": "OWAY.atr2cf292 is evaluated at the nominal 292 C base calibration condition. Original stored temperature_C labels are retained but no additional temperature correction is applied.",
+  "current_CF_coefficients": "Read from models.py and unchanged in the full-fit evaluation",
+  "protocol": "All nine named coefficients optimized separately in each of 25 CV fits; threshold constants fixed."
+}

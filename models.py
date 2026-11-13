@@ -176,9 +176,10 @@ def patched_unpack_keras_model(packed_keras_model):
             model.load_weights(wpath)
             return model
 
-class NaiveLinear():
+class InformedLinear():
     '''
-    Naive estimator of per-plan TTS given 2 or more fluences, assuming linear scaling
+    Informed linear estimator with fluence filtering, optional log-fluence
+    fitting, common-fluence averaging, and constant-prediction fallbacks.
     '''
     def __init__(self):
         alloys_multifluence = self._get_multifluence_alloys()
@@ -275,6 +276,187 @@ class NaiveLinear():
         df_together = pd.concat([df_sub, df_pred])
 
         return preds, df_together
+
+# BEGIN PREVIOUS NaiveLinear IMPLEMENTATION — retained for reference (2026-11-13)
+# class NaiveLinear():
+#     '''
+#     Naive estimator of per-plan TTS given 2 or more fluences, assuming linear scaling
+#     '''
+#     def __init__(self):
+#         alloys_multifluence = self._get_multifluence_alloys()
+#         self.alloys_multifluence = alloys_multifluence
+#         return
+#
+#     def _get_multifluence_alloys(self):
+#         # Iterate over alloys and try to find alloys with 3 different fluences, used to test naive linear model and OWAY model
+#         df = DataLoader().load_rpv_data()
+#         alloys = df['alloy'].unique()
+#
+#         alloys_multifluence = list()
+#         for alloy in alloys:
+#             df_sub = df[df['alloy'] == alloy]
+#             fluences = df_sub['log(fluence_n_cm2)']
+#             if fluences.unique().shape[0] >= 3:
+#                 alloys_multifluence.append(alloy)
+#
+#         return alloys_multifluence
+#     def predict(self, df, alloy, fluence, fit_log_scale=False, fluence_threshold=3e19):
+#         # Check the specified alloy is a multifluence alloy
+#         # Update: don't need this, just guess the average of available data if don't have 3 unique fluences
+#         if alloy not in self.alloys_multifluence:
+#             use_average_tts = True
+#         else:
+#             use_average_tts = False
+#             #raise ValueError('The specified alloy does not have 3 or more unique fluences, change to a suitable alloy')
+#
+#         #print(alloy, use_average_tts)
+#         df_sub = df[df['alloy'] == alloy]
+#         # Invoke the fluence threshold for what points to include in linear fit
+#         df_sub = df_sub[df_sub['fluence_n_cm2'] >= fluence_threshold]
+#         fluences = df_sub['fluence_n_cm2']
+#         trues = df_sub['Measured DT41J  [C]']
+#
+#         # Check the length again
+#         if df_sub.shape[0] < 2:
+#             use_average_tts = True
+#
+#         # Sometimes there are multiple points at one fluence. For now, just average the true TTS
+#         x = list()
+#         y = list()
+#         for f in fluences.unique():
+#             if fit_log_scale == True:
+#                 x.append(np.log10(f))
+#             else:
+#                 x.append(f)
+#             y.append(np.mean(df_sub[df_sub['fluence_n_cm2'] == f]['Measured DT41J  [C]']))
+#
+#         print(x, y)
+#
+#         if use_average_tts == False:
+#             print('Doing linear')
+#             # Do linear full fit
+#             data = pd.DataFrame({'x': x, 'y': y})
+#             linear = LinearRegression().fit(np.array(data['x']).reshape(-1, 1), np.array(data['y']).reshape(-1, 1))
+#             if fit_log_scale == True:
+#                 preds_data = linear.predict(np.log10(np.array(df_sub['fluence_n_cm2'])).reshape(-1, 1))
+#             else:
+#                 preds_data = linear.predict(np.array(df_sub['fluence_n_cm2']).reshape(-1, 1))
+#             slope = linear.coef_[0]
+#
+#             # If slope is positive, use linear model to predict the desired fluence. Otherwise, just use max value
+#             if slope > 0:
+#                 print('Slope is positive')
+#                 if fit_log_scale == True:
+#                     preds = linear.predict(np.array([np.log10(fluence)]).reshape(-1, 1))[0]
+#                 else:
+#                     preds = linear.predict(np.array([fluence]).reshape(-1, 1))[0]
+#             else:
+#                 print('Slope not positive, using max')
+#                 preds = np.max(y)
+#         else:
+#             print('Use max TTS')
+#             preds_data = df_sub['Measured DT41J  [C]']
+#             try:
+#                 preds = np.max(y)
+#             except:
+#                 # Probably only one fluence passing the criteria, so just return max of rest of the data
+#                 try:
+#                     preds = np.max(preds_data)
+#                 except:
+#                     try:
+#                         preds = np.max(trues)
+#                     except:
+#                         #If no data, then nan
+#                         preds = np.nan
+#
+#         df_sub['Naive linear predicted TTS (degC)'] = preds_data
+#
+#         # Add a new line to the alloy df that contains the new fluence and its prediction
+#         df_pred = pd.DataFrame({'fluence_n_cm2': [fluence], 'Naive linear predicted TTS (degC)': preds})
+#
+#         df_together = pd.concat([df_sub, df_pred])
+#
+#         return preds, df_together
+# END PREVIOUS NaiveLinear IMPLEMENTATION
+
+class NaiveLinear:
+    """Unconstrained OLS using every supplied measurement, defaulting to log fluence.
+
+    Production includes the highest measured point. For evaluation, explicitly
+    pass remove_highest_fluence=True or supply a prefiltered training dataframe.
+    No anchors, slope constraints, aggregation, clipping or fallbacks are used.
+    """
+
+    prediction_column = 'Naive linear predicted TTS (degC)'
+    target_column = 'Measured DT41J  [C]'
+    fluence_scale = 1e20
+
+    def __init__(self):
+        self.status_ = 'not fitted'
+        self.slope_degC_per_log10_fluence_ = np.nan
+        self.slope_degC_per_n_cm2_ = np.nan
+        self.slope_degC_per_1e20_n_cm2_ = np.nan
+        self.intercept_degC_ = np.nan
+        self.r2_ = np.nan
+
+    def predict(self, df, alloy, fluence, fit_log_scale=True,
+                fluence_threshold=None, remove_highest_fluence=False):
+        """Fit supplied alloy rows; log10(fluence/1e20) is the default x value.
+
+        fit_log_scale=False explicitly selects the former raw-fluence OLS.
+        No fluence threshold is applied; filter the dataframe explicitly if
+        needed. At least two distinct remaining measured fluences are required.
+        The intercept is at fluence=1e20 for log fits and fluence=0 for raw fits.
+        """
+        if fluence_threshold not in (None, 0):
+            raise ValueError('NaiveLinear fits all supplied rows; apply any cutoff before fitting.')
+        required = ['alloy', 'fluence_n_cm2', self.target_column]
+        missing = [name for name in required if name not in df]
+        if missing:
+            raise KeyError('Missing required column(s): ' + ', '.join(missing))
+        rows = df[df.alloy.eq(alloy)].copy()
+        maximum = rows.fluence_n_cm2.max()
+        held_out = rows.fluence_n_cm2.eq(maximum) if remove_highest_fluence else pd.Series(False, index=rows.index)
+        rows = rows.loc[~held_out].copy()
+        self.fit_log_scale_ = bool(fit_log_scale)
+        self.training_row_indices_ = rows.index.tolist()
+        self.training_row_count_ = len(rows)
+        self.slope_degC_per_log10_fluence_ = np.nan
+        self.slope_degC_per_n_cm2_ = np.nan
+        self.slope_degC_per_1e20_n_cm2_ = np.nan
+        self.intercept_degC_ = np.nan
+        self.r2_ = np.nan
+        values = rows[['fluence_n_cm2', self.target_column]].to_numpy(dtype=float)
+        target = float(fluence)
+        if not np.isfinite(values).all() or not np.isfinite(target):
+            raise ValueError('NaiveLinear requires finite fluence and TTS values.')
+        if fit_log_scale and ((values[:, 0] <= 0).any() or target <= 0):
+            raise ValueError('Log-fluence fitting requires strictly positive fluence.')
+        if rows.fluence_n_cm2.nunique() < 2:
+            self.status_ = 'unavailable: fewer than two distinct training fluences'
+            prediction = np.nan
+            rows[self.prediction_column] = np.nan
+        else:
+            raw_x = values[:, 0] / self.fluence_scale
+            x = np.log10(raw_x) if fit_log_scale else raw_x
+            y = values[:, 1]
+            slope, intercept = np.linalg.lstsq(np.column_stack([x, np.ones(len(x))]), y, rcond=None)[0]
+            fitted = slope * x + intercept
+            query_x = np.log10(target / self.fluence_scale) if fit_log_scale else target / self.fluence_scale
+            prediction = float(slope * query_x + intercept)
+            if fit_log_scale:
+                self.slope_degC_per_log10_fluence_ = float(slope)
+            else:
+                self.slope_degC_per_1e20_n_cm2_ = float(slope)
+                self.slope_degC_per_n_cm2_ = float(slope / self.fluence_scale)
+            self.intercept_degC_ = float(intercept)
+            total = float(np.sum((y - y.mean())**2))
+            self.r2_ = float(1 - np.sum((y - fitted)**2) / total) if total > 0 else np.nan
+            self.status_ = 'fitted'
+            rows[self.prediction_column] = fitted
+        query = pd.DataFrame({'alloy': [alloy], 'fluence_n_cm2': [target],
+                              self.prediction_column: [prediction]})
+        return prediction, pd.concat([rows, query], ignore_index=True)
 
 class NaiveLinear_OLD():
     '''
@@ -644,115 +826,207 @@ class OWAY():
                     'wt_percent_P', 'flux_n_cm2_sec', 'fluence_n_cm2']
         return features
 
-    def predict(self, df, atr2fte=1.38e20, query_database=True, fluence_threshold=3e19, remove_highest_fluence=False):
-        #
-        #   OWAY model using linear interpolation between EONY DSY@4E19 and ATR2CF at ATR2fte
-        #   for a desired fluence for prediction
-        #   (ATRCF - eonydsy)/(atr2fte - eonyft)
-        #   - EONY part can be replace with ML
-        #   - Can use more recent cc = TTS/DSY
-        #   - All can be done on TTS base instead of DSY done here
-        #   - Temperature dependence can be replaced with ML
-        #
-        #tts_4e19 = eony_tts(pf, temp_c, wt_cu, wt_ni, wt_mn, wt_p, 4e19, flux)
-        oway_tts = list()
-        oway_r2 = list()
-        oway_mae = list()
-        oway_usedeony = list()
-        if query_database == True:
-            df_data = DataLoader().load_rpv_data()
+    def _atr2_endpoint(self, row):
+        """Current fixed CF, shifted to the query temperature, then converted to TTS."""
+        dsy = self.atr2cf292(float(row.wt_percent_Cu), float(row.wt_percent_Ni),
+            float(row.wt_percent_Mn), float(row.wt_percent_Si), float(row.wt_percent_P))
+        dsy = self.atr2cfti(float(row.temperature_C), dsy)
+        return float(0.00067*dsy**2 + 0.49*dsy)
 
-        for i, d in df.iterrows():
-            pf = d['Product Form']
-            temp_c = d['temperature_C']
-            wt_cu = d['wt_percent_Cu']
-            wt_ni = d['wt_percent_Ni']
-            wt_mn = d['wt_percent_Mn']
-            wt_si = d['wt_percent_Si']
-            wt_p = d['wt_percent_P']
-            flux = d['flux_n_cm2_sec']
-            fluence = d['fluence_n_cm2']
-            df_eony = pd.DataFrame({'Product Form': [pf],
-                               'temperature_C': [temp_c],
-                               'wt_percent_Cu': [wt_cu],
-                               'wt_percent_Ni': [wt_ni],
-                               'wt_percent_Mn': [wt_mn],
-                               'wt_percent_P': [wt_p],
-                               'fluence_n_cm2': [4e19],
-                               'flux_n_cm2_sec': [flux]})
+    @staticmethod
+    def _database_rows(row, database):
+        """Prefer alloy identity; use exact chemistry only when no identity is supplied."""
+        if database is None:
+            return pd.DataFrame(columns=['alloy', 'fluence_n_cm2', 'flux_n_cm2_sec',
+                                         'Measured DT41J  [C]'])
+        rows = database
+        if 'datatype' in rows:
+            rows = rows[rows.datatype.eq('Plotter')]
+        if 'alloy' in row and pd.notna(row['alloy']):
+            rows = rows[rows.alloy.eq(row['alloy'])]
+        else:
+            for element in ['Cu', 'Ni', 'Mn', 'P', 'Si']:
+                column = 'wt_percent_' + element
+                rows = rows[rows[column].eq(row[column])]
+        return rows.copy()
 
-            # Try to query database to get TTS of actual material for OWAY prediction, otherwise use EONY model
-            if query_database == True:
-                # Try to find the exact composition in the database
-                filtered_df = df_data[(df_data['fluence_n_cm2'] > fluence_threshold) & (df_data['wt_percent_Cu'] == wt_cu) & (df_data['wt_percent_Ni'] == wt_ni) & (df_data['wt_percent_Mn'] == wt_mn) & (df_data['wt_percent_P'] == wt_p) & (df_data['wt_percent_Si'] == wt_si)]
+    @staticmethod
+    def _query_fluence(row):
+        value = float(row['fluence_n_cm2']) if 'fluence_n_cm2' in row else 10**float(row['log(fluence_n_cm2)'])
+        if not np.isfinite(value) or value < 0:
+            raise ValueError('Prediction fluence must be finite and nonnegative.')
+        return value
 
-                if filtered_df.shape[0] >= 1:
-                    if remove_highest_fluence == True:
-                        max_fluence = max(filtered_df['log(fluence_n_cm2)'])
-                        filtered_df = filtered_df[filtered_df['log(fluence_n_cm2)'] != max_fluence]
+    def fit(self, database_rows, *, query_profiles=None, fluence_threshold=3e19,
+            remove_highest_fluence=False, include_threshold=False, atr2fte=1.38e20):
+        """Fit production TTS versus linear fluence to measured data plus ATR2.
 
-                if filtered_df.shape[0] < 1:
-                    oway_usedeony.append(True)
-                    preds, _ = EONY().predict(df_eony)
-                    dsy_4e19, cc = self.tts2dsy(pf, preds)
-                    atr2dsy292 = self.atr2cf292(wt_cu, wt_ni, wt_mn, wt_si, wt_p)
-                    atr2dsyti = self.atr2cfti(temp_c, atr2dsy292)
-                    owaydsy = (atr2dsyti - dsy_4e19) / (atr2fte - 4e19) * (fluence - 4e19) + dsy_4e19
-                    #owaytts = owaydsy * cc
-                    owaytts = 0.00067*owaydsy**2 +0.49*owaydsy
-                    try:
-                        oway_tts.append(owaytts[0])
-                    except:
-                        oway_tts.append(owaytts)
-                    oway_mae.append(np.nan)
-                    oway_r2.append(np.nan)
-                else:
-                    # Get fit line of TTS vs. fluence and ATR2 point, then predict the prediction of interest back
-                    # Just need this to get cc value
-                    oway_usedeony.append(False)
-                    preds_ = np.array([np.mean(filtered_df['Measured DT41J  [C]'])])
-                    dsy_4e19, cc = self.tts2dsy(pf, preds_)
-                    atr2dsy292 = self.atr2cf292(wt_cu, wt_ni, wt_mn, wt_si, wt_p)
-                    atr2dsyti = self.atr2cfti(temp_c, atr2dsy292)
-                    #atr2_tts = cc*atr2dsyti
-                    atr2_tts = 0.00067*atr2dsyti**2 + 0.49*atr2dsyti
-                    x = list(filtered_df['fluence_n_cm2'])
-                    x.append(1.38e20)
-                    y = list(filtered_df['Measured DT41J  [C]'])
-                    y.append(float(atr2_tts))
-                    linear = LinearRegression()
-                    linear.fit(np.array(x).reshape(-1,1), np.array(y).reshape(-1, 1))
-                    owaytts = linear.predict(np.array([fluence]).reshape(-1,1))
-                    oway_preds = linear.predict(np.array(x).reshape(-1,1))
-                    oway_tts.append(owaytts[0][0])
-                    trues = np.array(y).reshape(-1, 1)
-                    r2 = r2_score(trues, oway_preds)
-                    mae = mean_absolute_error(trues, oway_preds)
-                    oway_mae.append(mae)
-                    oway_r2.append(r2)
+        Default: use all measured points strictly above 3e19, including the
+        highest point, at any flux. No EONY fallback. Evaluation must explicitly
+        enable holdout and can request an inclusive threshold.
+        """
+        from RPV_model_benchmarking.production_linear import fit_oway
+        return fit_oway(database_rows, atr2_endpoint=self._atr2_endpoint,
+            query_profiles=query_profiles, fluence_threshold_n_cm2=fluence_threshold,
+            hold_out_highest=remove_highest_fluence, include_threshold=include_threshold,
+            atr2_fluence_n_cm2=atr2fte)
 
-            else:
-                oway_usedeony.append(True)
-                preds, _ = EONY().predict(df_eony)
-                dsy_4e19, cc = self.tts2dsy(pf, preds)
-                atr2dsy292 = self.atr2cf292(wt_cu, wt_ni, wt_mn, wt_si, wt_p)
-                atr2dsyti = self.atr2cfti(temp_c, atr2dsy292)
-                owaydsy = (atr2dsyti - dsy_4e19) / (atr2fte - 4e19) * (fluence - 4e19) + dsy_4e19
-                #owaytts = owaydsy*cc
-                owaytts = 0.00067*owaydsy**2 +0.49*owaydsy
-                try:
-                    oway_tts.append(owaytts[0])
-                except:
-                    oway_tts.append(owaytts)
-                oway_mae.append(np.nan)
-                oway_r2.append(np.nan)
-        #print(oway_tts)
-        df['OWAY predicted TTS (degC)'] = oway_tts
-        df['OWAY EONY model used'] = oway_usedeony
-        df['OWAY linear fit R2'] = oway_r2
-        df['OWAY linear fit MAE'] = oway_mae
+    # BEGIN PREVIOUS OWAY IMPLEMENTATION — retained for reference (2026-11-13)
+    # def predict(self, df, atr2fte=1.38e20, query_database=True, fluence_threshold=3e19, remove_highest_fluence=False):
+    #     #
+    #     #   OWAY model using linear interpolation between EONY DSY@4E19 and ATR2CF at ATR2fte
+    #     #   for a desired fluence for prediction
+    #     #   (ATRCF - eonydsy)/(atr2fte - eonyft)
+    #     #   - EONY part can be replace with ML
+    #     #   - Can use more recent cc = TTS/DSY
+    #     #   - All can be done on TTS base instead of DSY done here
+    #     #   - Temperature dependence can be replaced with ML
+    #     #
+    #     #tts_4e19 = eony_tts(pf, temp_c, wt_cu, wt_ni, wt_mn, wt_p, 4e19, flux)
+    #     oway_tts = list()
+    #     oway_r2 = list()
+    #     oway_mae = list()
+    #     oway_usedeony = list()
+    #     if query_database == True:
+    #         df_data = DataLoader().load_rpv_data()
+    #
+    #     for i, d in df.iterrows():
+    #         pf = d['Product Form']
+    #         temp_c = d['temperature_C']
+    #         wt_cu = d['wt_percent_Cu']
+    #         wt_ni = d['wt_percent_Ni']
+    #         wt_mn = d['wt_percent_Mn']
+    #         wt_si = d['wt_percent_Si']
+    #         wt_p = d['wt_percent_P']
+    #         flux = d['flux_n_cm2_sec']
+    #         fluence = d['fluence_n_cm2']
+    #         df_eony = pd.DataFrame({'Product Form': [pf],
+    #                            'temperature_C': [temp_c],
+    #                            'wt_percent_Cu': [wt_cu],
+    #                            'wt_percent_Ni': [wt_ni],
+    #                            'wt_percent_Mn': [wt_mn],
+    #                            'wt_percent_P': [wt_p],
+    #                            'fluence_n_cm2': [4e19],
+    #                            'flux_n_cm2_sec': [flux]})
+    #
+    #         # Try to query database to get TTS of actual material for OWAY prediction, otherwise use EONY model
+    #         if query_database == True:
+    #             # Try to find the exact composition in the database
+    #             filtered_df = df_data[(df_data['fluence_n_cm2'] > fluence_threshold) & (df_data['wt_percent_Cu'] == wt_cu) & (df_data['wt_percent_Ni'] == wt_ni) & (df_data['wt_percent_Mn'] == wt_mn) & (df_data['wt_percent_P'] == wt_p) & (df_data['wt_percent_Si'] == wt_si)]
+    #
+    #             if filtered_df.shape[0] >= 1:
+    #                 if remove_highest_fluence == True:
+    #                     max_fluence = max(filtered_df['log(fluence_n_cm2)'])
+    #                     filtered_df = filtered_df[filtered_df['log(fluence_n_cm2)'] != max_fluence]
+    #
+    #             if filtered_df.shape[0] < 1:
+    #                 oway_usedeony.append(True)
+    #                 preds, _ = EONY().predict(df_eony)
+    #                 dsy_4e19, cc = self.tts2dsy(pf, preds)
+    #                 atr2dsy292 = self.atr2cf292(wt_cu, wt_ni, wt_mn, wt_si, wt_p)
+    #                 atr2dsyti = self.atr2cfti(temp_c, atr2dsy292)
+    #                 owaydsy = (atr2dsyti - dsy_4e19) / (atr2fte - 4e19) * (fluence - 4e19) + dsy_4e19
+    #                 #owaytts = owaydsy * cc
+    #                 owaytts = 0.00067*owaydsy**2 +0.49*owaydsy
+    #                 try:
+    #                     oway_tts.append(owaytts[0])
+    #                 except:
+    #                     oway_tts.append(owaytts)
+    #                 oway_mae.append(np.nan)
+    #                 oway_r2.append(np.nan)
+    #             else:
+    #                 # Get fit line of TTS vs. fluence and ATR2 point, then predict the prediction of interest back
+    #                 # Just need this to get cc value
+    #                 oway_usedeony.append(False)
+    #                 preds_ = np.array([np.mean(filtered_df['Measured DT41J  [C]'])])
+    #                 dsy_4e19, cc = self.tts2dsy(pf, preds_)
+    #                 atr2dsy292 = self.atr2cf292(wt_cu, wt_ni, wt_mn, wt_si, wt_p)
+    #                 atr2dsyti = self.atr2cfti(temp_c, atr2dsy292)
+    #                 #atr2_tts = cc*atr2dsyti
+    #                 atr2_tts = 0.00067*atr2dsyti**2 + 0.49*atr2dsyti
+    #                 x = list(filtered_df['fluence_n_cm2'])
+    #                 x.append(1.38e20)
+    #                 y = list(filtered_df['Measured DT41J  [C]'])
+    #                 y.append(float(atr2_tts))
+    #                 linear = LinearRegression()
+    #                 linear.fit(np.array(x).reshape(-1,1), np.array(y).reshape(-1, 1))
+    #                 owaytts = linear.predict(np.array([fluence]).reshape(-1,1))
+    #                 oway_preds = linear.predict(np.array(x).reshape(-1,1))
+    #                 oway_tts.append(owaytts[0][0])
+    #                 trues = np.array(y).reshape(-1, 1)
+    #                 r2 = r2_score(trues, oway_preds)
+    #                 mae = mean_absolute_error(trues, oway_preds)
+    #                 oway_mae.append(mae)
+    #                 oway_r2.append(r2)
+    #
+    #         else:
+    #             oway_usedeony.append(True)
+    #             preds, _ = EONY().predict(df_eony)
+    #             dsy_4e19, cc = self.tts2dsy(pf, preds)
+    #             atr2dsy292 = self.atr2cf292(wt_cu, wt_ni, wt_mn, wt_si, wt_p)
+    #             atr2dsyti = self.atr2cfti(temp_c, atr2dsy292)
+    #             owaydsy = (atr2dsyti - dsy_4e19) / (atr2fte - 4e19) * (fluence - 4e19) + dsy_4e19
+    #             #owaytts = owaydsy*cc
+    #             owaytts = 0.00067*owaydsy**2 +0.49*owaydsy
+    #             try:
+    #                 oway_tts.append(owaytts[0])
+    #             except:
+    #                 oway_tts.append(owaytts)
+    #             oway_mae.append(np.nan)
+    #             oway_r2.append(np.nan)
+    #     #print(oway_tts)
+    #     df['OWAY predicted TTS (degC)'] = oway_tts
+    #     df['OWAY EONY model used'] = oway_usedeony
+    #     df['OWAY linear fit R2'] = oway_r2
+    #     df['OWAY linear fit MAE'] = oway_mae
+    #
+    #     return np.array(oway_tts), df
+    # END PREVIOUS OWAY IMPLEMENTATION
 
-        return np.array(oway_tts), df
+    def predict(self, df, atr2fte=1.38e20, query_database=True, fluence_threshold=3e19,
+                remove_highest_fluence=False, include_threshold=False, database=None):
+        """Return production OWAY predictions, with NaN when measured data are unavailable.
+
+        Supply database to reuse a loaded dataframe. query_database=False makes
+        the measured-data fit unavailable; it never silently invokes EONY.
+        """
+        from RPV_model_benchmarking.production_linear import select_high_fluence_rows
+        if query_database and database is None:
+            database = DataLoader().load_rpv_data()
+        output = df.copy()
+        predictions, available, counts, scores, maes, statuses = [], [], [], [], [], []
+        self.fits_ = []
+        for _, row in output.iterrows():
+            rows = self._database_rows(row, database if query_database else None)
+            used, _ = select_high_fluence_rows(rows, fluence_threshold_n_cm2=fluence_threshold,
+                include_threshold=include_threshold, hold_out_highest=remove_highest_fluence)
+            valid = len(used) > 0 and np.unique(np.r_[used.fluence_n_cm2.to_numpy(), atr2fte]).size >= 2
+            fitted = None
+            prediction = score = mae = np.nan
+            if valid:
+                fitted = self.fit(rows, query_profiles=row.to_frame().T, atr2fte=atr2fte,
+                    fluence_threshold=fluence_threshold, remove_highest_fluence=remove_highest_fluence,
+                    include_threshold=include_threshold)
+                prediction = float(fitted.predict(self._query_fluence(row)))
+                x = np.r_[used.fluence_n_cm2.to_numpy(), atr2fte]
+                y = np.r_[used['Measured DT41J  [C]'].to_numpy(), fitted.atr2_tts_degC]
+                residual = fitted.predict(x) - y
+                mae = float(np.mean(abs(residual)))
+                total = float(np.sum((y - y.mean())**2))
+                score = float(1 - np.sum(residual**2)/total) if total > 0 else np.nan
+            self.fits_.append(fitted)
+            predictions.append(prediction); available.append(valid); counts.append(len(used))
+            scores.append(score); maes.append(mae)
+            statuses.append('fitted' if valid else 'unavailable: no measured high-fluence fit')
+        output['OWAY predicted TTS (degC)'] = predictions
+        output['OWAY available'] = available
+        output['OWAY measured fit rows'] = counts
+        output['OWAY EONY model used'] = False
+        output['OWAY linear fit R2'] = scores
+        output['OWAY linear fit MAE'] = maes
+        output['OWAY fit status'] = statuses
+        return np.asarray(predictions, dtype=float), output
+
 
 class JOWAY(OWAY):
 
@@ -776,69 +1050,198 @@ class JOWAY(OWAY):
         return dsy, cc
     '''
 
-    def predict(self, df, atr2fte=1.38e20, nn_model='Jacobs26'):
-        #
-        #   OWAY model using linear interpolation between EONY DSY@4E19 and ATR2CF at ATR2fte
-        #   for a desired fluence for prediction
-        #   (ATRCF - eonydsy)/(atr2fte - eonyft)
-        #   - EONY part can be replace with ML
-        #   - Can use more recent cc = TTS/DSY
-        #   - All can be done on TTS base instead of DSY done here
-        #   - Temperature dependence can be replaced with ML
-        #
-        #tts_4e19 = eony_tts(pf, temp_c, wt_cu, wt_ni, wt_mn, wt_p, 4e19, flux)
-        models = {'Jacobs23': EnsembleNN_Jacobs23(), 'Jacobs24': EnsembleNN_Jacobs24(),
-                  'Jacobs25': EnsembleNN_Jacobs25(), 'Jacobs26': EnsembleNN_Jacobs26()}
-        model = models[nn_model]
-        oway_tts = list()
-        atr2cf_preds = list()
-        features = model._features()
+    @staticmethod
+    def _get_predictor(nn_model, predictor):
+        if predictor is not None:
+            return predictor
+        choices = {'Jacobs23': EnsembleNN_Jacobs23, 'Jacobs24': EnsembleNN_Jacobs24,
+                   'Jacobs25': EnsembleNN_Jacobs25, 'Jacobs26': EnsembleNN_Jacobs26}
+        if nn_model not in choices:
+            raise ValueError('Unknown Jacobs ensemble: ' + str(nn_model))
+        return choices[nn_model]()
 
-        df_nn = copy(df)
-        print('joway df_nn', df_nn.shape)
-        df_nn = df_nn.drop(['log(fluence_n_cm2)'], axis=1)
-        log_fluence = [np.log10(4e19) for i in range(df_nn.shape[0])]
-        df_nn['log(fluence_n_cm2)'] = log_fluence
+    @staticmethod
+    def _jacobs_endpoint(predictor, row, fluence, flux):
+        anchor = row.to_frame().T.copy()
+        anchor['fluence_n_cm2'] = fluence
+        anchor['log(fluence_n_cm2)'] = np.log10(fluence)
+        anchor['flux_n_cm2_sec'] = flux
+        anchor['log(flux_n_cm2_sec)'] = np.log10(flux)
+        anchor['Time'] = fluence / flux
+        anchor['log(Time)'] = np.log10(fluence / flux)
+        result = predictor.predict(anchor)
+        values = result[0] if isinstance(result, tuple) else result
+        values = np.asarray(values, dtype=float).ravel()
+        if len(values) != 1 or not np.isfinite(values).all():
+            raise ValueError('Jacobs predictor must return one finite anchor per query profile.')
+        return float(values[0])
 
-        if 'fluence_n_cm2' in features:
-            df_nn = df_nn.drop(['fluence_n_cm2'], axis=1)
-            fluence = [4e19 for i in range(df_nn.shape[0])]
-            df_nn['fluence_n_cm2'] = fluence
+    def fit(self, database_rows=None, *, query_profiles=None, flux_n_cm2_sec=None,
+            flux_tolerance_factor=1.25, fluence_threshold=3e19,
+            remove_highest_fluence=False, include_threshold=False,
+            jacobs_anchor_fluence=4e19, atr2fte=1.38e20, nn_model='Jacobs26', predictor=None):
+        """TTS-space fit: Jacobs26 anchor, flux-matched high-fluence data, ATR2.
 
-        df_nn = df_nn[features]
+        Query flux defaults to the highest database point's flux. With no
+        database, explicit flux and chemistry/temperature profiles are required.
+        Measured points must be within a factor of 1.25 of the query flux.
+        """
+        from RPV_model_benchmarking.production_linear import fit_ml_oway
+        predictor = self._get_predictor(nn_model, predictor)
+        return fit_ml_oway(database_rows=database_rows, query_profiles=query_profiles,
+            jacobs_endpoint=lambda row, fluence, flux: self._jacobs_endpoint(predictor, row, fluence, flux),
+            atr2_endpoint=self._atr2_endpoint, flux_n_cm2_sec=flux_n_cm2_sec,
+            flux_tolerance_factor=flux_tolerance_factor, fluence_threshold_n_cm2=fluence_threshold,
+            hold_out_highest=remove_highest_fluence, include_threshold=include_threshold,
+            jacobs_anchor_fluence_n_cm2=jacobs_anchor_fluence, atr2_fluence_n_cm2=atr2fte)
 
-        preds, _ = model.predict(df_nn)
+    # BEGIN PREVIOUS JOWAY IMPLEMENTATION — retained for reference (2026-11-13)
+    # def predict(self, df, atr2fte=1.38e20, nn_model='Jacobs26'):
+    #     #
+    #     #   OWAY model using linear interpolation between EONY DSY@4E19 and ATR2CF at ATR2fte
+    #     #   for a desired fluence for prediction
+    #     #   (ATRCF - eonydsy)/(atr2fte - eonyft)
+    #     #   - EONY part can be replace with ML
+    #     #   - Can use more recent cc = TTS/DSY
+    #     #   - All can be done on TTS base instead of DSY done here
+    #     #   - Temperature dependence can be replaced with ML
+    #     #
+    #     #tts_4e19 = eony_tts(pf, temp_c, wt_cu, wt_ni, wt_mn, wt_p, 4e19, flux)
+    #     models = {'Jacobs23': EnsembleNN_Jacobs23(), 'Jacobs24': EnsembleNN_Jacobs24(),
+    #               'Jacobs25': EnsembleNN_Jacobs25(), 'Jacobs26': EnsembleNN_Jacobs26()}
+    #     model = models[nn_model]
+    #     oway_tts = list()
+    #     atr2cf_preds = list()
+    #     features = model._features()
+    #
+    #     df_nn = copy(df)
+    #     print('joway df_nn', df_nn.shape)
+    #     df_nn = df_nn.drop(['log(fluence_n_cm2)'], axis=1)
+    #     log_fluence = [np.log10(4e19) for i in range(df_nn.shape[0])]
+    #     df_nn['log(fluence_n_cm2)'] = log_fluence
+    #
+    #     if 'fluence_n_cm2' in features:
+    #         df_nn = df_nn.drop(['fluence_n_cm2'], axis=1)
+    #         fluence = [4e19 for i in range(df_nn.shape[0])]
+    #         df_nn['fluence_n_cm2'] = fluence
+    #
+    #     df_nn = df_nn[features]
+    #
+    #     preds, _ = model.predict(df_nn)
+    #
+    #     if 'Product Form' not in features:
+    #         # Assume plate
+    #         df_nn['Product Form'] = ['P' for i in range(df_nn.shape[0])]
+    #
+    #     for i, d in df.iterrows():
+    #     #for i, d in df_nn.iterrows():
+    #         pf = d['Product Form']
+    #         temp_c = d['temperature_C']
+    #         wt_cu = d['wt_percent_Cu']
+    #         wt_ni = d['wt_percent_Ni']
+    #         wt_mn = d['wt_percent_Mn']
+    #         wt_p = d['wt_percent_P']
+    #         wt_si = d['wt_percent_Si']
+    #         fluence = 10**d['log(fluence_n_cm2)']
+    #         log_flux = d['log(flux_n_cm2_sec)']
+    #
+    #         dsy_4e19, cc = self.tts2dsy(pf, preds[i])
+    #         atr2dsy292 = self.atr2cf292(wt_cu, wt_ni, wt_mn, wt_si, wt_p)
+    #         atr2dsyti = self.atr2cfti(temp_c, atr2dsy292)
+    #         owaydsy = (atr2dsyti - dsy_4e19) / (atr2fte - 4e19) * (fluence - 4e19) + dsy_4e19
+    #         #owaytts = owaydsy*cc
+    #         owaytts = 0.00067*owaydsy**2 + 0.49*owaydsy
+    #         oway_tts.append(owaytts)
+    #         #atr2cf_preds.append(atr2dsyti*cc)
+    #         atr2ttsti =  0.00067*atr2dsyti**2 + 0.49*atr2dsyti
+    #         atr2cf_preds.append(atr2ttsti)
+    #     df['NN predicted TTS (degC) at 4e19 fluence'] = preds
+    #     df['ATR2 CF TTS (degC) at 1.38e20 fluence'] = atr2cf_preds
+    #     df['JOWAY predicted TTS (degC)'] = oway_tts
+    #     return np.array(oway_tts), df
+    # END PREVIOUS JOWAY IMPLEMENTATION
 
-        if 'Product Form' not in features:
-            # Assume plate
-            df_nn['Product Form'] = ['P' for i in range(df_nn.shape[0])]
+    def predict(self, df, atr2fte=1.38e20, nn_model='Jacobs26', query_database=True,
+                fluence_threshold=3e19, remove_highest_fluence=False,
+                flux_n_cm2_sec=None, flux_tolerance_factor=1.25, include_threshold=False,
+                database=None, predictor=None):
+        """Production ML-OWAY; historical JOWAY name retained for compatibility.
 
-        for i, d in df.iterrows():
-        #for i, d in df_nn.iterrows():
-            pf = d['Product Form']
-            temp_c = d['temperature_C']
-            wt_cu = d['wt_percent_Cu']
-            wt_ni = d['wt_percent_Ni']
-            wt_mn = d['wt_percent_Mn']
-            wt_p = d['wt_percent_P']
-            wt_si = d['wt_percent_Si']
-            fluence = 10**d['log(fluence_n_cm2)']
-            log_flux = d['log(flux_n_cm2_sec)']
+        Flux is taken from the explicit argument or each query row. If neither
+        supplies a flux, use the highest-fluence database point's flux. The fit
+        includes every qualifying measurement by default. Holdout is explicit.
+        The Jacobs26 anchor remains at 4e19; the ATR2 anchor remains at 1.38e20.
+        """
+        if query_database and database is None:
+            database = DataLoader().load_rpv_data()
+        predictor = self._get_predictor(nn_model, predictor)
+        output = df.copy()
+        predictions, jacobs, atr2, counts, fluxes, sources = [], [], [], [], [], []
+        self.fits_ = []
+        contexts, anchor_rows = [], []
+        for _, row in output.iterrows():
+            rows = self._database_rows(row, database if query_database else None)
+            flux = flux_n_cm2_sec
+            if flux is None and 'flux_n_cm2_sec' in row and pd.notna(row['flux_n_cm2_sec']):
+                flux = float(row['flux_n_cm2_sec'])
+            if flux is None and 'log(flux_n_cm2_sec)' in row and pd.notna(row['log(flux_n_cm2_sec)']):
+                flux = 10**float(row['log(flux_n_cm2_sec)'])
+            source = 'user_specified'
+            if flux is None:
+                if rows.empty:
+                    raise ValueError('Specify query flux when no database measurements are available.')
+                highest = rows[rows.fluence_n_cm2.eq(rows.fluence_n_cm2.max())]
+                choices = highest.flux_n_cm2_sec.unique()
+                if len(choices) != 1:
+                    raise ValueError('Highest-fluence rows have different fluxes; specify query flux.')
+                flux = float(choices[0])
+                source = 'highest_fluence_database_point'
+            if not np.isfinite(flux) or flux <= 0:
+                raise ValueError('Query flux must be finite and positive.')
+            anchor = row.copy()
+            anchor['fluence_n_cm2'] = 4e19
+            anchor['log(fluence_n_cm2)'] = np.log10(4e19)
+            anchor['flux_n_cm2_sec'] = flux
+            anchor['log(flux_n_cm2_sec)'] = np.log10(flux)
+            anchor['Time'] = 4e19 / flux
+            anchor['log(Time)'] = np.log10(4e19 / flux)
+            anchor_rows.append(anchor)
+            contexts.append((row, rows, flux, source))
+        # A single batched network evaluation avoids rebuilding the ensemble
+        # separately for every point in an embrittlement curve.
+        anchor_values = np.array([])
+        if anchor_rows:
+            result = predictor.predict(pd.DataFrame(anchor_rows).reset_index(drop=True))
+            anchor_values = np.asarray(result[0] if isinstance(result, tuple) else result, dtype=float).ravel()
+            if len(anchor_values) != len(contexts) or not np.isfinite(anchor_values).all():
+                raise ValueError('Jacobs predictor must return one finite anchor per query profile.')
+        from RPV_model_benchmarking.production_linear import fit_ml_oway
+        for (row, rows, flux, source), anchor_value in zip(contexts, anchor_values):
+            fitted = fit_ml_oway(database_rows=rows, query_profiles=row.to_frame().T,
+                jacobs_endpoint=lambda *_: float(anchor_value), atr2_endpoint=self._atr2_endpoint,
+                flux_n_cm2_sec=flux, flux_tolerance_factor=flux_tolerance_factor,
+                fluence_threshold_n_cm2=fluence_threshold, hold_out_highest=remove_highest_fluence,
+                include_threshold=include_threshold, jacobs_anchor_fluence_n_cm2=4e19,
+                atr2_fluence_n_cm2=atr2fte)
+            fitted.flux_source = source
+            predictions.append(float(fitted.predict(self._query_fluence(row))))
+            jacobs.append(fitted.jacobs_anchor_tts_degC); atr2.append(fitted.atr2_tts_degC)
+            counts.append(len(fitted.measured_fit_rows)); fluxes.append(fitted.flux_n_cm2_sec)
+            sources.append(fitted.flux_source); self.fits_.append(fitted)
+        output['NN predicted TTS (degC) at 4e19 fluence'] = jacobs
+        output['ATR2 CF TTS (degC) at 1.38e20 fluence'] = atr2
+        output['JOWAY predicted TTS (degC)'] = predictions
+        output['ML-OWAY predicted TTS (degC)'] = predictions
+        output['ML-OWAY measured fit rows'] = counts
+        output['ML-OWAY query flux (n/cm2/s)'] = fluxes
+        output['ML-OWAY flux source'] = sources
+        return np.asarray(predictions, dtype=float), output
 
-            dsy_4e19, cc = self.tts2dsy(pf, preds[i])
-            atr2dsy292 = self.atr2cf292(wt_cu, wt_ni, wt_mn, wt_si, wt_p)
-            atr2dsyti = self.atr2cfti(temp_c, atr2dsy292)
-            owaydsy = (atr2dsyti - dsy_4e19) / (atr2fte - 4e19) * (fluence - 4e19) + dsy_4e19
-            #owaytts = owaydsy*cc
-            owaytts = 0.00067*owaydsy**2 + 0.49*owaydsy
-            oway_tts.append(owaytts)
-            #atr2cf_preds.append(atr2dsyti*cc)
-            atr2ttsti =  0.00067*atr2dsyti**2 + 0.49*atr2dsyti
-            atr2cf_preds.append(atr2ttsti)
-        df['NN predicted TTS (degC) at 4e19 fluence'] = preds
-        df['ATR2 CF TTS (degC) at 1.38e20 fluence'] = atr2cf_preds
-        df['JOWAY predicted TTS (degC)'] = oway_tts
-        return np.array(oway_tts), df
+
+class MLOWAY(JOWAY):
+    """Production ML-OWAY; JOWAY remains available as a compatible class name."""
+    pass
+
 
 class XGBoost():
     # XGBoost model with fitted derivatives to have dTTS/dfluence > 0 and dTTS/dflux < 0
@@ -1338,6 +1741,128 @@ class EnsembleNN_Jacobs25():
 
         return preds, df
 
+# BEGIN PREVIOUS Jacobs26 IMPLEMENTATION — retained for reference (2026-11-13)
+# class EnsembleNN_Jacobs26():
+#     # NN ENSEMBLE MODEL
+#
+#     def __init__(self):
+#         return
+#
+#     def _rebuild_model(self, n_features, model_folder):
+#
+#         # We need to define the function that builds the network architecture
+#
+#         def keras_model(n_features):
+#             model = Sequential()
+#             model.add(Dense(1024, input_dim=n_features, kernel_initializer='normal', activation='relu'))
+#             model.add(Dropout(0.3))
+#             model.add(Dense(1024, kernel_initializer='normal', activation='relu'))
+#             model.add(Dropout(0.3))
+#             model.add(Dense(1, kernel_initializer='normal'))
+#             model.compile(loss='mean_squared_error', optimizer='adam')
+#
+#             return model
+#
+#         model_keras = KerasRegressor(build_fn=keras_model, epochs=250, batch_size=100, verbose=0)
+#         model_bagged_keras_rebuild = EnsembleModel(model=model_keras, n_estimators=10)
+#
+#         num_models = 10
+#         models = list()
+#         for i in range(num_models):
+#             models.append(
+#                 tf.keras.models.load_model(os.path.join(model_folder, 'keras_model_' + str(i) + '_functional.keras')))
+#
+#         model_bagged_keras_rebuild.model.estimators_ = models
+#         model_bagged_keras_rebuild.model.estimators_features_ = [np.arange(0, n_features) for i in models]
+#
+#         return model_bagged_keras_rebuild
+#
+#     def _get_preds_ebars(self, model, df_featurized, preprocessor, return_ebars=True, return_domains=True):
+#         preds_each = list()
+#         ebars_each = list()
+#         domains_each = list()
+#
+#         df_featurized_scaled = preprocessor.transform(pd.DataFrame(df_featurized))
+#
+#         if return_ebars == True:
+#             for i, x in df_featurized_scaled.iterrows():
+#                 preds_per_data = list()
+#                 for m in model.model.estimators_:
+#                     preds_per_data.append(m.predict(pd.DataFrame(x).T, verbose=0))  # pd.DataFrame(x).T
+#                 preds_each.append(np.mean(preds_per_data))
+#                 ebars_each.append(np.std(preds_per_data))
+#
+#         else:
+#             preds_each = model.predict(df_featurized_scaled)  # Can't seem to pass verbose=0 to EnsembleModel
+#             try:
+#                 ebars_each = [np.nan for i in range(preds_each.shape[0])]
+#             except:
+#                 ebars_each = [np.nan]
+#
+#         if return_domains == True:
+#             # Get domains
+#             _original_unpack = scu.unpack_keras_model
+#             scu.unpack_keras_model = patched_unpack_keras_model
+#             with open(os.path.join('RPV_model_benchmarking/model_files/Jacobs26/domain', 'model.dill'), 'rb') as f:
+#                 model_domain = dill.load(f)
+#             domains_each = model_domain.predict(df_featurized_scaled)
+#             domains_each = domains_each['d_pred']
+#         else:
+#             try:
+#                 domains_each = [np.nan for i in range(np.array(preds_each).shape[0])]
+#             except:
+#                 domains_each = [np.nan]
+#
+#         if return_ebars == True:
+#             # Jacobs 26 model recalibration
+#             a = 1.300052530566834
+#             b = 5.537998189600857
+#             #a = -0.041
+#             #b = 2.041
+#             #c = 3.124
+#             #ebars_each_recal = a * np.array(ebars_each) ** 2 + b * np.array(ebars_each) + c
+#             ebars_each_recal = a*np.array(ebars_each) + b
+#         else:
+#             ebars_each_recal = ebars_each
+#
+#         return np.array(preds_each).ravel(), np.array(ebars_each_recal).ravel(), np.array(domains_each).ravel()
+#
+#     def _features(self):
+#         features = ['temperature_C', 'wt_percent_Cu', 'wt_percent_Ni', 'wt_percent_Mn', 'wt_percent_P',
+#                     'wt_percent_Si', 'wt_percent_C', 'log(fluence_n_cm2)', 'log(flux_n_cm2_sec)', 'fluence_n_cm2',
+#                     'flux_n_cm2_sec']
+#         return features
+#
+#     def predict(self, df, anchors='2026', return_ebars=False, return_domains=False):
+#         # anchors = 2023 or 2025
+#         features = self._features()
+#         if anchors == '2026':
+#             model_folder = os.path.join(path, 'model_files/Jacobs26/fullfit')
+#         elif anchors == 'None':
+#             model_folder = os.path.join(path, 'model_files/Jacobs26/fullfit_noanchors')
+#
+#         df_features = df[features]
+#
+#         # Rebuild the saved model
+#         n_features = df_features.shape[1]
+#         model = self._rebuild_model(n_features, model_folder)
+#
+#         # Normalize the input features
+#         preprocessor = joblib.load(os.path.join(model_folder, 'StandardScaler.pkl'))
+#
+#         # Get predictions and error bars from model
+#         preds, ebars, domains = self._get_preds_ebars(model, df_features, preprocessor, return_ebars=return_ebars, return_domains=return_domains)
+#
+#         pred_dict = {'Jacobs26 NN ensemble predicted TTS (degC)': preds,
+#                      'Jacobs26 NN ensemble error bars (degC)': ebars,
+#                      'Jacobs26 NN ensemble domain d': domains}
+#
+#         for k, v in pred_dict.items():
+#             df[k] = v
+#
+#         return preds, df
+# END PREVIOUS Jacobs26 IMPLEMENTATION
+
 class EnsembleNN_Jacobs26():
     # NN ENSEMBLE MODEL
 
@@ -1398,9 +1923,13 @@ class EnsembleNN_Jacobs26():
         if return_domains == True:
             # Get domains
             _original_unpack = scu.unpack_keras_model
-            scu.unpack_keras_model = patched_unpack_keras_model
-            with open(os.path.join('RPV_model_benchmarking/model_files/Jacobs26/domain', 'model.dill'), 'rb') as f:
-                model_domain = dill.load(f)
+            original_unpack = scu.unpack_keras_model
+            try:
+                scu.unpack_keras_model = patched_unpack_keras_model
+                with open(os.path.join(path, 'model_files/Jacobs26/domain', 'model.dill'), 'rb') as f:
+                    model_domain = dill.load(f)
+            finally:
+                scu.unpack_keras_model = original_unpack
             domains_each = model_domain.predict(df_featurized_scaled)
             domains_each = domains_each['d_pred']
         else:
